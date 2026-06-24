@@ -1,10 +1,11 @@
 import http from "node:http";
 import { validateScene, type AuthContext, type Scene } from "@tvsys/shared";
+import { normalizeCode, type ActivationService } from "./activation.js";
 import { HttpError, type AuthService } from "./auth.js";
 import type { Store } from "./store.js";
 import type { SignageHub } from "./ws.js";
 
-export const createRequestHandler = (store: Store, auth: AuthService, getHub: () => SignageHub | undefined) => {
+export const createRequestHandler = (store: Store, auth: AuthService, activation: ActivationService, getHub: () => SignageHub | undefined) => {
   return async (request: http.IncomingMessage, response: http.ServerResponse) => {
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
@@ -14,6 +15,12 @@ export const createRequestHandler = (store: Store, auth: AuthService, getHub: ()
 
       if (request.method === "GET" && url.pathname === "/api/health") {
         return sendJson(response, { ok: true, at: new Date().toISOString() });
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/tv/current-scene") {
+        const { context, display } = await auth.authenticateDisplayHeader(request.headers.authorization);
+        const current = await store.getCurrentSceneForDisplay(context.user.id, display.displayId);
+        return sendJson(response, current ?? { scene: null, sceneVersion: 0 });
       }
 
       const context = await auth.authenticateHeader(request.headers.authorization);
@@ -56,6 +63,38 @@ export const createRequestHandler = (store: Store, auth: AuthService, getHub: ()
         });
         getHub()?.broadcastStatus(display);
         return sendJson(response, { display }, 201);
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/tv/activation/start") {
+        const body = await readJson<{
+          installationId: string;
+          appVersion: string;
+          capabilities: unknown;
+        }>(request);
+        if (!body.installationId?.trim()) return sendJson(response, { error: "Installation id is required" }, 400);
+        if (!body.appVersion?.trim()) return sendJson(response, { error: "App version is required" }, 400);
+        const result = activation.create({
+          tvUser: context.user,
+          installationId: body.installationId.trim(),
+          appVersion: body.appVersion,
+          capabilities: body.capabilities as Parameters<typeof activation.create>[0]["capabilities"]
+        });
+        return sendJson(response, result, 201);
+      }
+
+      if (request.method === "GET" && url.pathname === "/api/tv/activation/status") {
+        const code = normalizeCode(url.searchParams.get("code") ?? "");
+        if (!code) return sendJson(response, { error: "Linking code is required" }, 400);
+        return sendJson(response, activation.status(context.user, code));
+      }
+
+      if (request.method === "POST" && url.pathname === "/api/tv/activation/claim") {
+        const body = await readJson<{ code: string }>(request);
+        const code = normalizeCode(body.code ?? "");
+        if (!code) return sendJson(response, { error: "Linking code is required" }, 400);
+        const result = await activation.claim(store, context.user, code);
+        getHub()?.broadcastStatus(result.display);
+        return sendJson(response, result, 201);
       }
 
       const displayMatch = url.pathname.match(/^\/api\/displays\/([^/]+)$/);

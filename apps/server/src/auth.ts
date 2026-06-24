@@ -1,4 +1,5 @@
 import { bearerAuthorization, extractBearerToken, type AuthContext, type AuthenticatedUser, type CafeRow } from "@tvsys/shared";
+import type { ActivationService, DisplayTokenPayload } from "./activation.js";
 import type { ServerConfig } from "./config.js";
 import type { Store } from "./store.js";
 
@@ -14,7 +15,8 @@ export class HttpError extends Error {
 export class AuthService {
   constructor(
     private readonly config: ServerConfig,
-    private readonly store: Store
+    private readonly store: Store,
+    private readonly activation?: ActivationService
   ) {}
 
   async authenticateHeader(header: string | string[] | undefined): Promise<AuthContext> {
@@ -37,5 +39,26 @@ export class AuthService {
     const user: AuthenticatedUser = { id: body.id, email: body.email };
     const cafe: CafeRow = await this.store.ensureCafe(user);
     return { user, cafe };
+  }
+
+  async authenticateDisplayToken(token: string | undefined): Promise<AuthContext> {
+    const payload = await this.authenticateDisplayTokenPayload(token);
+    const user: AuthenticatedUser = { id: payload.ownerUserId };
+    const cafe: CafeRow = await this.store.ensureCafe(user);
+    return { user, cafe };
+  }
+
+  async authenticateDisplayHeader(header: string | string[] | undefined): Promise<{ context: AuthContext; display: DisplayTokenPayload }> {
+    const payload = await this.authenticateDisplayTokenPayload(extractBearerToken(header));
+    const user: AuthenticatedUser = { id: payload.ownerUserId };
+    const cafe: CafeRow = await this.store.ensureCafe(user);
+    return { context: { user, cafe }, display: payload };
+  }
+
+  private async authenticateDisplayTokenPayload(token: string | undefined): Promise<DisplayTokenPayload> {
+    if (!token) throw new HttpError(401, "Missing display token");
+    const displayToken = this.activation?.verifyDisplayToken(token);
+    if (!displayToken) throw new HttpError(401, "Invalid display token");
+    return displayToken;
   }
 }

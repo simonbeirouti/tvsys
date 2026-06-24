@@ -1,8 +1,9 @@
 import { Application, Assets, Graphics, Sprite } from "pixi.js";
-import { useEffect, useMemo, useRef, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import type { MediaLayer, Scene, SceneLayer, ShapeLayer } from "@tvsys/shared";
 
 export const SceneRenderer = ({ scene }: { scene: Scene }) => {
+  const viewport = useStageViewport(scene);
   const staticLayers = useMemo(
     () => scene.layers.filter((layer) => layer.visible && layer.type !== "shape" && layer.type !== "sprite"),
     [scene.layers]
@@ -15,20 +16,61 @@ export const SceneRenderer = ({ scene }: { scene: Scene }) => {
   return (
     <div className="stage-shell">
       <div
-        className="stage"
-        style={{
-          width: scene.canvas.width,
-          height: scene.canvas.height,
-          background: scene.backgroundColor ?? "#000"
-        }}
+        className="stage-frame"
+        style={{ width: viewport.width, height: viewport.height }}
       >
-        {staticLayers.map((layer) => (
-          <DomLayer key={layer.id} layer={layer} />
-        ))}
-        <PixiLayer scene={scene} layers={pixiLayers as Array<ShapeLayer | MediaLayer>} />
+        <div
+          className="stage"
+          style={{
+            width: scene.canvas.width,
+            height: scene.canvas.height,
+            background: scene.backgroundColor ?? "#000",
+            transform: `translate(${viewport.offsetX}px, ${viewport.offsetY}px) scale(${viewport.scale})`
+          }}
+        >
+          {staticLayers.map((layer) => (
+            <DomLayer key={layer.id} layer={layer} />
+          ))}
+          <PixiLayer scene={scene} layers={pixiLayers as Array<ShapeLayer | MediaLayer>} />
+        </div>
       </div>
     </div>
   );
+};
+
+const useStageViewport = (scene: Scene): { height: number; offsetX: number; offsetY: number; scale: number; width: number } => {
+  const [viewport, setViewport] = useState(() => ({
+    width: typeof window === "undefined" ? scene.canvas.width : window.innerWidth,
+    height: typeof window === "undefined" ? scene.canvas.height : window.innerHeight
+  }));
+
+  useEffect(() => {
+    const update = () => {
+      setViewport({ width: window.innerWidth, height: window.innerHeight });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("orientationchange", update);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("orientationchange", update);
+    };
+  }, []);
+
+  const width = Math.max(1, viewport.width);
+  const height = Math.max(1, viewport.height);
+  const rawScale = Math.min(width / scene.canvas.width, height / scene.canvas.height);
+  const scale = Number.isFinite(rawScale) && rawScale > 0 ? rawScale : 1;
+  const scaledWidth = scene.canvas.width * scale;
+  const scaledHeight = scene.canvas.height * scale;
+
+  return {
+    width,
+    height,
+    scale,
+    offsetX: (width - scaledWidth) / 2,
+    offsetY: (height - scaledHeight) / 2
+  };
 };
 
 const DomLayer = ({ layer }: { layer: SceneLayer }) => {
@@ -153,7 +195,7 @@ const PixiLayer = ({ scene, layers }: { scene: Scene; layers: Array<ShapeLayer |
     };
   }, [layers, scene.canvas.height, scene.canvas.width]);
 
-  return <div className="pixi-layer" ref={ref} />;
+  return <div className="pixi-layer" ref={ref} style={{ width: scene.canvas.width, height: scene.canvas.height }} />;
 };
 
 const configurePixiObject = (object: Graphics | Sprite, layer: ShapeLayer | MediaLayer) => {

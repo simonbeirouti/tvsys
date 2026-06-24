@@ -1,6 +1,7 @@
 export interface DisplayConfig {
   serverUrl: string;
   displayId: string;
+  displayAuthToken: string;
   installationId: string;
 }
 
@@ -10,7 +11,17 @@ export const loadDisplayConfig = (): DisplayConfig | undefined => {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) return undefined;
   try {
-    return JSON.parse(raw) as DisplayConfig;
+    const parsed = JSON.parse(raw) as Partial<DisplayConfig>;
+    if (
+      typeof parsed.serverUrl === "string" &&
+      typeof parsed.displayId === "string" &&
+      typeof parsed.displayAuthToken === "string" &&
+      typeof parsed.installationId === "string"
+    ) {
+      return parsed as DisplayConfig;
+    }
+    localStorage.removeItem(STORAGE_KEY);
+    return undefined;
   } catch {
     localStorage.removeItem(STORAGE_KEY);
     return undefined;

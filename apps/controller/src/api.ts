@@ -51,6 +51,17 @@ export class ControllerApi {
     return body.display;
   }
 
+  async linkTv(code: string): Promise<DisplayCreateResponse["display"]> {
+    const response = await this.fetchAuth("/api/tv/activation/claim", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ code })
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const body = (await response.json()) as DisplayCreateResponse;
+    return body.display;
+  }
+
   async updateDisplay(displayId: string, input: { name?: string; groupName?: string; positionLabel?: string }): Promise<DisplayStatus> {
     const response = await this.fetchAuth(`/api/displays/${encodeURIComponent(displayId)}`, {
       method: "PATCH",
@@ -62,7 +73,7 @@ export class ControllerApi {
     return body.display;
   }
 
-  async uploadAsset(file: File): Promise<string> {
+  async uploadAsset(file: File): Promise<AssetResponse["asset"]> {
     const response = await this.fetchAuth(`/api/assets/${encodeURIComponent(file.name)}`, {
       method: "PUT",
       headers: { "content-type": file.type || "application/octet-stream" },
@@ -70,7 +81,10 @@ export class ControllerApi {
     });
     if (!response.ok) throw new Error(await response.text());
     const body = (await response.json()) as AssetResponse;
-    return isAbsoluteUrl(body.asset.url) ? body.asset.url : `${this.serverUrl}${body.asset.url}`;
+    return {
+      ...body.asset,
+      url: isAbsoluteUrl(body.asset.url) ? body.asset.url : `${this.serverUrl}${body.asset.url}`
+    };
   }
 
   async sendScene(displayId: string, scene: Scene): Promise<void> {

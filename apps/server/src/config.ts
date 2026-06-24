@@ -1,3 +1,13 @@
+import { existsSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const serverEnvPath = resolve(dirname(fileURLToPath(import.meta.url)), "../.env");
+
+if (existsSync(serverEnvPath)) {
+  process.loadEnvFile(serverEnvPath);
+}
+
 export interface ServerConfig {
   port: number;
   host: string;

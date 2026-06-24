@@ -28,7 +28,7 @@ export const connectDisplaySocket = (options: DisplaySocketOptions): DisplaySock
   let heartbeatTimer: number | undefined;
 
   const open = async () => {
-    const accessToken = await options.getAccessToken();
+    const accessToken = options.config.displayAuthToken ?? (await options.getAccessToken());
     if (!accessToken) {
       options.onStatus("Signed out");
       return;
@@ -50,7 +50,6 @@ export const connectDisplaySocket = (options: DisplaySocketOptions): DisplaySock
         })
       );
       heartbeatTimer = window.setInterval(sendHeartbeat, 30_000);
-      sendHeartbeat();
     };
 
     socket.onmessage = (event) => {

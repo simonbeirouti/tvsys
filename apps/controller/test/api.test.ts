@@ -23,9 +23,12 @@ describe("ControllerApi", () => {
     );
 
     const api = new ControllerApi("http://localhost:8787", async () => "access-token");
-    const url = await api.uploadAsset(new File(["body"], "menu.png", { type: "image/png" }));
+    const asset = await api.uploadAsset(new File(["body"], "menu.png", { type: "image/png" }));
 
-    expect(url).toBe("https://project.supabase.co/storage/v1/object/sign/tvsys-assets/user/asset-1/menu.png?token=signed");
+    expect(asset).toMatchObject({
+      id: "asset-1",
+      url: "https://project.supabase.co/storage/v1/object/sign/tvsys-assets/user/asset-1/menu.png?token=signed"
+    });
   });
 
   it("prefixes relative asset URLs with the TVSys server URL", async () => {
@@ -45,8 +48,11 @@ describe("ControllerApi", () => {
     );
 
     const api = new ControllerApi("http://localhost:8787", async () => "access-token");
-    const url = await api.uploadAsset(new File(["body"], "menu.png", { type: "image/png" }));
+    const asset = await api.uploadAsset(new File(["body"], "menu.png", { type: "image/png" }));
 
-    expect(url).toBe("http://localhost:8787/assets/asset-1");
+    expect(asset).toMatchObject({
+      id: "asset-1",
+      url: "http://localhost:8787/assets/asset-1"
+    });
   });
 });

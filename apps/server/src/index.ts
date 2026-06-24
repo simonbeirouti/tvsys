@@ -1,4 +1,5 @@
 import http from "node:http";
+import { ActivationService } from "./activation.js";
 import { AuthService } from "./auth.js";
 import { loadConfig } from "./config.js";
 import { createRequestHandler } from "./http.js";
@@ -7,10 +8,11 @@ import { SignageHub } from "./ws.js";
 
 const config = loadConfig();
 const store = new Store(config);
-const auth = new AuthService(config, store);
+const activation = new ActivationService(config);
+const auth = new AuthService(config, store, activation);
 let hub: SignageHub | undefined;
 
-const server = http.createServer(createRequestHandler(store, auth, () => hub));
+const server = http.createServer(createRequestHandler(store, auth, activation, () => hub));
 hub = new SignageHub(server, store, config, auth);
 
 server.listen(config.port, config.host, () => {

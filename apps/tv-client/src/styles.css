@@ -1,14 +1,23 @@
 html {
   background: #000;
+  height: 100%;
+  width: 100%;
 }
 
 body {
+  height: 100%;
   margin: 0;
   overflow: hidden;
+  width: 100%;
 }
 
 * {
   box-sizing: border-box;
+}
+
+#root {
+  height: 100%;
+  width: 100%;
 }
 
 .display-app,
@@ -19,18 +28,30 @@ body {
   width: 100vw;
 }
 
+@supports (height: 100dvh) {
+  .display-app,
+  .stage-shell {
+    height: 100dvh;
+  }
+}
+
 .stage-shell {
   align-items: center;
   display: flex;
   justify-content: center;
 }
 
+.stage-frame {
+  flex: 0 0 auto;
+  overflow: hidden;
+  position: relative;
+}
+
 .stage {
   flex: 0 0 auto;
   overflow: hidden;
   position: relative;
-  transform: scale(min(calc(100vw / 1920), calc(100vh / 1080)));
-  transform-origin: center;
+  transform-origin: top left;
 }
 
 .scene-layer,
@@ -65,7 +86,5 @@ body {
 }
 
 .pixi-layer {
-  height: 1080px;
   pointer-events: none;
-  width: 1920px;
 }

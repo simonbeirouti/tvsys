@@ -1,5 +1,7 @@
 import { DEFAULT_CANVAS, cryptoRandomId, type Scene, type SceneLayer } from "@tvsys/shared";
 
+export const sceneAssetReference = (assetId: string): string => `asset:${assetId}`;
+
 export const createEditableScene = (): Scene => ({
   id: cryptoRandomId("scene"),
   title: "Live Signage Scene",

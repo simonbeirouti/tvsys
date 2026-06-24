@@ -22,8 +22,9 @@ Controller browser  <---- authenticated REST + WS ---->  TVSys server  <---- aut
 ## Documentation
 
 1. [Setup](docs/setup.md): requirements, first run, controller setup, TV client testing, Samsung/Tizen package installation, and remote operation.
-2. [Deployment](docs/deployment.md): Fly.io deployment for the server from this pnpm workspace.
-3. [Shared UI](docs/ui.md): shared Tailwind/shadcn package, app integration, component generation, and verification commands.
+2. [Apps and Packages](docs/apps.md): clear differences between the server, controller, TV client, shared library, and UI package.
+3. [Deployment](docs/deployment.md): Fly.io deployment for the server from this pnpm workspace.
+4. [Shared UI](docs/ui.md): shared Tailwind/shadcn package, app integration, component generation, and verification commands.
 
 ## Daily Use
 

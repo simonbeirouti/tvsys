@@ -105,6 +105,8 @@ Uploaded assets go through the server, not directly from browser clients to Stor
 4. Server inserts an `assets` metadata row with the same `owner_user_id`.
 5. Server returns an owner-authorized asset URL/reference.
 
+Editable scenes should keep uploaded media as stable `asset:ASSET_ID` references. The controller may use the returned signed URL for local preview, but persisted scenes and delivery requests should not depend on that temporary URL.
+
 When sending a scene to a TV, the server resolves owned asset references into short-lived signed Storage URLs. A TV can only receive signed URLs for assets owned by the same user that owns the TV.
 
 ## Scene Delivery Flow
@@ -184,4 +186,3 @@ VITE_SUPABASE_PUBLISHABLE_KEY=
 ```
 
 The server URL is still entered in the controller and TV setup UI so local, LAN, and remote deployments can point at the right TVSys server.
-

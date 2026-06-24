@@ -16,11 +16,14 @@ import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { ControllerApi } from "./api.js";
 import { controllerQueryKeys, upsertDisplay } from "./query.js";
-import { addImageLayer, createEditableScene, updateFirstLayer } from "./sceneFactory.js";
+import { addImageLayer, createEditableScene, sceneAssetReference, updateFirstLayer } from "./sceneFactory.js";
 import { connectControllerSocket } from "./ws.js";
 
 const DEFAULT_SERVER_URL = "http://localhost:8787";
 export const DEFAULT_COMPANY_ID = "owned";
+
+const AUTH_REDIRECT_SEARCH_PARAMS = ["code", "error", "error_code", "error_description"];
+const AUTH_REDIRECT_HASH_PARAMS = ["access_token", "expires_at", "expires_in", "refresh_token", "token_type", "type"];
 
 export type ScreenFilter = "all" | "online" | "offline";
 
@@ -46,9 +49,11 @@ export const App = () => {
   const [otp, setOtp] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [authError, setAuthError] = useState("");
+  const [linkingCode, setLinkingCode] = useState("");
   const [newDisplay, setNewDisplay] = useState({ id: "", name: "", groupName: "", positionLabel: "" });
   const [selectedDraft, setSelectedDraft] = useState({ name: "", groupName: "", positionLabel: "" });
   const [scene, setScene] = useState<Scene>(() => createEditableScene());
+  const [assetPreviewUrls, setAssetPreviewUrls] = useState<Record<string, string>>({});
   const [logs, setLogs] = useState<string[]>([]);
   const selectedDisplayId = params.displayId ?? "";
   const screenFilter = isScreenFilter(search.filter) ? search.filter : "all";
@@ -58,7 +63,7 @@ export const App = () => {
     () =>
       supabaseUrl && supabaseKey
         ? createTvsysSupabaseClient(supabaseUrl, supabaseKey, {
-            auth: { autoRefreshToken: true, persistSession: true }
+            auth: { autoRefreshToken: true, detectSessionInUrl: false, persistSession: true }
           })
         : undefined,
     [supabaseKey, supabaseUrl]
@@ -84,19 +89,67 @@ export const App = () => {
 
   useEffect(() => {
     if (!supabase) return;
-    void supabase.auth.getSession().then(({ data }) => {
+    let mounted = true;
+    const hydrateSession = async () => {
+      const callback = getAuthCallbackParams();
+      if (callback.error) {
+        setAuthError(callback.error);
+        cleanAuthCallbackUrl();
+        return;
+      }
+      if (callback.code) {
+        const { data, error } = await supabase.auth.exchangeCodeForSession(callback.code);
+        cleanAuthCallbackUrl();
+        if (!mounted) return;
+        if (error) {
+          setAuthError(error.message);
+          return;
+        }
+        if (data.session) {
+          setOtp("");
+          setOtpSent(false);
+          setSession({ accessToken: data.session.access_token, user: { id: data.session.user.id, email: data.session.user.email } });
+          return;
+        }
+      }
+      if (callback.accessToken && callback.refreshToken) {
+        const { data, error } = await supabase.auth.setSession({
+          access_token: callback.accessToken,
+          refresh_token: callback.refreshToken
+        });
+        cleanAuthCallbackUrl();
+        if (!mounted) return;
+        if (error) {
+          setAuthError(error.message);
+          return;
+        }
+        if (data.session) {
+          setOtp("");
+          setOtpSent(false);
+          setSession({ accessToken: data.session.access_token, user: { id: data.session.user.id, email: data.session.user.email } });
+          return;
+        }
+      }
+      const { data } = await supabase.auth.getSession();
       const current = data.session;
-      if (current) setSession({ accessToken: current.access_token, user: { id: current.user.id, email: current.user.email } });
-    });
+      if (mounted && current) setSession({ accessToken: current.access_token, user: { id: current.user.id, email: current.user.email } });
+    };
+    void hydrateSession();
     const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       if (nextSession) {
+        setOtp("");
+        setOtpSent(false);
+        setAuthError("");
         setSession({ accessToken: nextSession.access_token, user: { id: nextSession.user.id, email: nextSession.user.email } });
       } else {
         setSession(undefined);
         queryClient.clear();
       }
     });
-    return () => data.subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      data.subscription.unsubscribe();
+    };
   }, [queryClient, supabase]);
 
   const meQuery = useQuery({
@@ -121,6 +174,10 @@ export const App = () => {
   const textLayer = scene.layers.find((layer) => layer.type === "text");
   const backgroundLayer = scene.layers.find((layer) => layer.type === "background");
   const shapeLayer = scene.layers.find((layer) => layer.type === "shape");
+  const trimmedAuthEmail = authEmail.trim();
+  const trimmedOtp = otp.trim();
+  const canRequestOtp = Boolean(trimmedAuthEmail);
+  const canVerifyOtp = canRequestOtp && trimmedOtp.length === 6;
 
   useEffect(() => {
     if (!session) return;
@@ -159,6 +216,17 @@ export const App = () => {
     onError: (error) => addLog(error instanceof Error ? error.message : "Could not create display")
   });
 
+  const linkTvMutation = useMutation({
+    mutationFn: () => api.linkTv(linkingCode.trim()),
+    onSuccess: (display) => {
+      queryClient.setQueryData(controllerQueryKeys.displays(userId), (current: DisplayStatus[] | undefined) => upsertDisplay(current, display));
+      setLinkingCode("");
+      addLog(`Linked ${display.name ?? display.id}`);
+      void navigate({ to: "/companies/$companyId/displays/$displayId", params: { companyId: DEFAULT_COMPANY_ID, displayId: display.id }, search: { filter: "all" } });
+    },
+    onError: (error) => addLog(error instanceof Error ? error.message : "Could not link TV")
+  });
+
   const updateDisplayMutation = useMutation({
     mutationFn: () => {
       if (!selected) throw new Error("Select a display first");
@@ -173,8 +241,10 @@ export const App = () => {
 
   const uploadAssetMutation = useMutation({
     mutationFn: (file: File) => api.uploadAsset(file),
-    onSuccess: (assetUrl, file) => {
-      setScene((current) => addImageLayer(current, assetUrl));
+    onSuccess: (asset, file) => {
+      const assetReference = sceneAssetReference(asset.id);
+      setAssetPreviewUrls((current) => ({ ...current, [assetReference]: asset.url }));
+      setScene((current) => addImageLayer(current, assetReference));
       addLog(`Uploaded ${file.name}`);
     },
     onError: (error) => addLog(error instanceof Error ? error.message : "Could not upload asset")
@@ -195,11 +265,16 @@ export const App = () => {
     onError: (error) => addLog(error instanceof Error ? error.message : "Could not broadcast scene")
   });
 
-  const requestOtp = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const sendOtp = async () => {
     if (!supabase) return;
     setAuthError("");
-    const { error } = await supabase.auth.signInWithOtp({ email: authEmail.trim() });
+    setOtp("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email: trimmedAuthEmail,
+      options: {
+        emailRedirectTo: getAuthRedirectTo()
+      }
+    });
     if (error) {
       setAuthError(error.message);
       return;
@@ -207,16 +282,32 @@ export const App = () => {
     setOtpSent(true);
   };
 
+  const requestOtp = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    await sendOtp();
+  };
+
   const verifyOtp = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!supabase) return;
     setAuthError("");
-    const { data, error } = await supabase.auth.verifyOtp({ email: authEmail.trim(), token: otp, type: "email" });
+    const { data, error } = await supabase.auth.verifyOtp({ email: trimmedAuthEmail, token: trimmedOtp, type: "email" });
     if (error) {
       setAuthError(error.message);
       return;
     }
-    if (data.session) setSession({ accessToken: data.session.access_token, user: { id: data.session.user.id, email: data.session.user.email } });
+    if (data.session) {
+      setOtp("");
+      setOtpSent(false);
+      setSession({ accessToken: data.session.access_token, user: { id: data.session.user.id, email: data.session.user.email } });
+    }
+  };
+
+  const changeAuthEmail = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setAuthEmail(event.target.value);
+    setOtp("");
+    setOtpSent(false);
+    setAuthError("");
   };
 
   const signOut = async () => {
@@ -242,7 +333,7 @@ export const App = () => {
         <Card className="w-full max-w-md">
           <CardHeader>
             <CardTitle>Sign in to TVSys</CardTitle>
-            <CardDescription>Use your cafe email and the six-digit code Supabase sends you.</CardDescription>
+            <CardDescription>Use your cafe email, then enter the code or open the sign-in link Supabase sends you.</CardDescription>
           </CardHeader>
           <CardContent>
             <form className="grid gap-4" onSubmit={otpSent ? verifyOtp : requestOtp}>
@@ -250,11 +341,12 @@ export const App = () => {
                 <Input id="server-url" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} />
               </Field>
               <Field label="Email" htmlFor="email">
-                <Input id="email" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} />
+                <Input id="email" type="email" value={authEmail} onChange={changeAuthEmail} />
               </Field>
               {otpSent ? (
                 <div className="grid gap-2">
                   <Label>Six-digit code</Label>
+                  <p className="text-sm text-muted-foreground">Enter the code sent to {trimmedAuthEmail}.</p>
                   <InputOTP maxLength={6} value={otp} onChange={setOtp}>
                     <InputOTPGroup>
                       {[0, 1, 2, 3, 4, 5].map((index) => (
@@ -262,10 +354,18 @@ export const App = () => {
                       ))}
                     </InputOTPGroup>
                   </InputOTP>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    className="justify-self-start px-0"
+                    onClick={() => void sendOtp()}
+                  >
+                    Send a new code
+                  </Button>
                 </div>
               ) : null}
               {authError ? <p className="text-sm text-destructive">{authError}</p> : null}
-              <Button type="submit" disabled={!authEmail || (otpSent && otp.length !== 6)}>
+              <Button type="submit" disabled={otpSent ? !canVerifyOtp : !canRequestOtp}>
                 {otpSent ? "Verify code" : "Send code"}
               </Button>
             </form>
@@ -323,7 +423,13 @@ export const App = () => {
             </div>
             <Separator />
             <div className="grid gap-2">
-              <Input placeholder="Device id" value={newDisplay.id} onChange={(event) => setNewDisplay({ ...newDisplay, id: event.target.value })} />
+              <Input placeholder="TV linking code" value={linkingCode} onChange={(event) => setLinkingCode(event.target.value.replace(/\D/g, "").slice(0, 6))} />
+              <Button disabled={linkingCode.trim().length !== 6} onClick={() => linkTvMutation.mutate()}>
+                <Plus />
+                Link TV
+              </Button>
+              <Separator />
+              <Input placeholder="Manual device id" value={newDisplay.id} onChange={(event) => setNewDisplay({ ...newDisplay, id: event.target.value })} />
               <Input placeholder="Name" value={newDisplay.name} onChange={(event) => setNewDisplay({ ...newDisplay, name: event.target.value })} />
               <Input placeholder="Group" value={newDisplay.groupName} onChange={(event) => setNewDisplay({ ...newDisplay, groupName: event.target.value })} />
               <Input placeholder="Position" value={newDisplay.positionLabel} onChange={(event) => setNewDisplay({ ...newDisplay, positionLabel: event.target.value })} />
@@ -362,7 +468,7 @@ export const App = () => {
                   >
                     {layer.type === "text" ? layer.text : null}
                     {layer.type === "shape" ? <span className="block size-full" style={{ background: layer.fill, borderRadius: layer.shape === "circle" ? "50%" : 6 }} /> : null}
-                    {layer.type === "image" ? <img className="size-full object-cover" src={layer.assetUrl} alt="" /> : null}
+                    {layer.type === "image" ? <img className="size-full object-cover" src={assetPreviewUrls[layer.assetUrl] ?? layer.assetUrl} alt="" /> : null}
                   </div>
                 ))}
               </div>
@@ -413,11 +519,11 @@ export const App = () => {
             <div className="grid gap-2 sm:grid-cols-2">
               <Button disabled={!selected} onClick={() => sendSceneMutation.mutate()}>
                 <Send />
-                Send selected
+                Send to selected TV
               </Button>
-              <Button variant="outline" onClick={() => broadcastSceneMutation.mutate()}>
+              <Button disabled={!displays.length} variant="outline" onClick={() => broadcastSceneMutation.mutate()}>
                 <Upload />
-                Broadcast
+                Broadcast to all TVs
               </Button>
             </div>
           </CardContent>
@@ -487,3 +593,32 @@ const Stat = ({ label, value }: { label: string; value: string }) => (
     <dd className="font-medium">{value}</dd>
   </div>
 );
+
+const getAuthRedirectTo = (): string => {
+  const url = new URL(window.location.href);
+  AUTH_REDIRECT_SEARCH_PARAMS.forEach((param) => url.searchParams.delete(param));
+  url.hash = "";
+  return url.toString();
+};
+
+const getAuthCallbackParams = (): { accessToken?: string; code?: string; error?: string; refreshToken?: string } => {
+  const url = new URL(window.location.href);
+  const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+  const error = url.searchParams.get("error_description") ?? url.searchParams.get("error") ?? hash.get("error_description") ?? hash.get("error") ?? undefined;
+  return {
+    accessToken: hash.get("access_token") ?? undefined,
+    code: url.searchParams.get("code") ?? undefined,
+    error,
+    refreshToken: hash.get("refresh_token") ?? undefined
+  };
+};
+
+const cleanAuthCallbackUrl = () => {
+  const url = new URL(window.location.href);
+  AUTH_REDIRECT_SEARCH_PARAMS.forEach((param) => url.searchParams.delete(param));
+  const hash = new URLSearchParams(url.hash.startsWith("#") ? url.hash.slice(1) : url.hash);
+  AUTH_REDIRECT_HASH_PARAMS.forEach((param) => hash.delete(param));
+  const nextHash = hash.toString();
+  url.hash = nextHash ? `#${nextHash}` : "";
+  window.history.replaceState(window.history.state, "", url.toString());
+};

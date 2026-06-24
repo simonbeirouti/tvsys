@@ -95,7 +95,9 @@ export class SignageHub {
     const accessToken = url.searchParams.get("access_token") ?? undefined;
     let context: AuthContext;
     try {
-      context = await this.auth.authenticateToken(accessToken);
+      context = url.pathname === "/ws/display" && accessToken?.startsWith("display_")
+        ? await this.auth.authenticateDisplayToken(accessToken)
+        : await this.auth.authenticateToken(accessToken);
     } catch {
       socket.destroy();
       return;
@@ -109,36 +111,42 @@ export class SignageHub {
 
   private acceptDisplay(socket: WebSocket, context: AuthContext): void {
     let authenticatedDisplayId: string | undefined;
+    let messageQueue = Promise.resolve();
     const authTimer = setTimeout(() => {
       if (!authenticatedDisplayId) socket.close(4001, "Display registration timed out");
     }, this.config.unauthenticatedSocketTimeoutMs);
 
     socket.on("message", (raw) => {
-      void (async () => {
-        const parsed = parseJsonMessage(raw.toString());
-        if (!parsed.ok) {
-          this.sendToDisplaySocket(socket, { type: "server_error", message: parsed.errors.join(", ") });
-          return;
-        }
-
-        const message = parsed.value as DisplayToServerMessage;
-        if (!authenticatedDisplayId) {
-          if (message.type !== "register_display") {
-            socket.close(4002, "First display message must be register_display");
+      messageQueue = messageQueue
+        .then(async () => {
+          const parsed = parseJsonMessage(raw.toString());
+          if (!parsed.ok) {
+            this.sendToDisplaySocket(socket, { type: "server_error", message: parsed.errors.join(", ") });
             return;
           }
-          authenticatedDisplayId = await this.registerDisplay(socket, context, message);
-          if (authenticatedDisplayId) clearTimeout(authTimer);
-          return;
-        }
 
-        if ("displayId" in message && message.displayId !== authenticatedDisplayId) {
-          socket.close(4003, "Display id changed during connection");
-          return;
-        }
+          const message = parsed.value as DisplayToServerMessage;
+          if (!authenticatedDisplayId) {
+            if (message.type !== "register_display") {
+              socket.close(4002, "First display message must be register_display");
+              return;
+            }
+            authenticatedDisplayId = await this.registerDisplay(socket, context, message);
+            if (authenticatedDisplayId) clearTimeout(authTimer);
+            return;
+          }
 
-        await this.handleDisplayMessage(context, message);
-      })();
+          if ("displayId" in message && message.displayId !== authenticatedDisplayId) {
+            socket.close(4003, "Display id changed during connection");
+            return;
+          }
+
+          await this.handleDisplayMessage(context, message);
+        })
+        .catch((error) => {
+          const message = error instanceof Error ? error.message : "Display message failed";
+          this.sendToDisplaySocket(socket, { type: "server_error", message });
+        });
     });
 
     socket.on("close", () => {

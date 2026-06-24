@@ -34,14 +34,22 @@ export class Store {
     input: { id?: string; name?: string; groupName?: string; positionLabel?: string; installationId?: string }
   ): Promise<DisplayRecord> {
     const id = input.id?.trim() || crypto.randomUUID();
-    const row = await this.insertOne<DeviceRow>("devices", {
+    const inputRow = {
       id,
       owner_user_id: ownerUserId,
       installation_id: input.installationId ?? null,
       name: input.name ?? null,
       group_name: input.groupName ?? null,
       position_label: input.positionLabel ?? null
-    });
+    };
+    const { data, error } = await this.db.from("devices").insert(inputRow).select("*").single();
+    if (error) {
+      if (!isUniqueViolation(error)) throw new Error(error.message);
+      const existing = await this.selectOne<DeviceRow>("devices", { id, owner_user_id: ownerUserId });
+      if (existing) return displayStatusFromDeviceRow(existing);
+      throw new Error(`Display id is already in use: ${id}`);
+    }
+    const row = data as DeviceRow;
     return displayStatusFromDeviceRow(row);
   }
 
@@ -54,37 +62,32 @@ export class Store {
     appVersion: string;
     capabilities: DisplayCapabilities;
   }): Promise<DisplayRecord> {
-    const existing = await this.selectOne<DeviceRow>("devices", {
-      owner_user_id: input.ownerUserId,
-      installation_id: input.installationId
-    });
-    if (existing) {
-      const updated = await this.updateOne<DeviceRow>("devices", existing.id, {
-        name: input.name ?? existing.name,
-        group_name: input.groupName ?? existing.group_name,
-        position_label: input.positionLabel ?? existing.position_label,
-        app_version: input.appVersion,
-        capabilities_json: input.capabilities,
-        updated_at: new Date().toISOString()
-      });
-      return displayStatusFromDeviceRow(updated);
-    }
-    const created = await this.createDisplay(input.ownerUserId, {
+    const existing = await this.findDeviceByInstallation(input.ownerUserId, input.installationId);
+    if (existing) return this.updateRegisteredTv(existing, input);
+
+    const now = new Date().toISOString();
+    const rowInput = {
       id: crypto.randomUUID(),
+      owner_user_id: input.ownerUserId,
+      installation_id: input.installationId,
       name: input.name ?? "New TV",
-      groupName: input.groupName,
-      positionLabel: input.positionLabel,
-      installationId: input.installationId
-    });
-    return (
-      (await this.markDisplayOnline({
-        ownerUserId: input.ownerUserId,
-        displayId: created.id,
-        installationId: input.installationId,
-        appVersion: input.appVersion,
-        capabilities: input.capabilities
-      })) ?? created
-    );
+      group_name: input.groupName ?? null,
+      position_label: input.positionLabel ?? null,
+      online: true,
+      last_heartbeat_at: now,
+      app_version: input.appVersion,
+      capabilities_json: input.capabilities,
+      last_error: null,
+      updated_at: now
+    };
+    const { data, error } = await this.db.from("devices").insert(rowInput).select("*").single();
+    if (error) {
+      if (!isUniqueViolation(error)) throw new Error(error.message);
+      const raced = await this.findDeviceByInstallation(input.ownerUserId, input.installationId);
+      if (raced) return this.updateRegisteredTv(raced, input);
+      throw new Error(error.message);
+    }
+    return displayStatusFromDeviceRow(data as DeviceRow);
   }
 
   async updateDisplay(
@@ -266,6 +269,17 @@ export class Store {
     return { display: displayStatusFromDeviceRow(row), scene: sceneRecord };
   }
 
+  async getCurrentSceneForDisplay(ownerUserId: string, displayId: string): Promise<{ scene: Scene; sceneVersion: number } | undefined> {
+    const display = await this.getDisplay(ownerUserId, displayId);
+    if (!display?.currentSceneId) return undefined;
+    const scene = await this.getScene(ownerUserId, display.currentSceneId);
+    if (!scene) return undefined;
+    return {
+      scene: await this.resolveSceneAssets(ownerUserId, scene.scene),
+      sceneVersion: display.currentSceneVersion
+    };
+  }
+
   async saveAsset(ownerUserId: string, input: { filename: string; mimeType: string; body: Buffer }): Promise<AssetRecord> {
     const id = crypto.randomUUID();
     const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -335,9 +349,49 @@ export class Store {
     if (error) throw new Error(error.message);
     return data as TRow;
   }
+
+  private async findDeviceByInstallation(ownerUserId: string, installationId: string): Promise<DeviceRow | undefined> {
+    return this.selectOne<DeviceRow>("devices", {
+      owner_user_id: ownerUserId,
+      installation_id: installationId
+    });
+  }
+
+  private async updateRegisteredTv(
+    existing: DeviceRow,
+    input: {
+      name?: string;
+      groupName?: string;
+      positionLabel?: string;
+      appVersion: string;
+      capabilities: DisplayCapabilities;
+    }
+  ): Promise<DisplayRecord> {
+    const row = await this.updateOne<DeviceRow>("devices", existing.id, {
+      name: input.name ?? existing.name,
+      group_name: input.groupName ?? existing.group_name,
+      position_label: input.positionLabel ?? existing.position_label,
+      online: true,
+      last_heartbeat_at: new Date().toISOString(),
+      app_version: input.appVersion,
+      capabilities_json: input.capabilities,
+      last_error: null,
+      updated_at: new Date().toISOString()
+    });
+    return displayStatusFromDeviceRow(row);
+  }
 }
 
+const isUniqueViolation = (error: unknown): boolean => {
+  if (!error || typeof error !== "object") return false;
+  const maybeError = error as { code?: unknown; message?: unknown };
+  return maybeError.code === "23505" || (typeof maybeError.message === "string" && maybeError.message.includes("duplicate key value violates unique constraint"));
+};
+
 const extractAssetId = (value: string): string | undefined => {
+  const directAssetMatch = value.match(/^asset:([^/?#]+)$/);
+  if (directAssetMatch?.[1]) return directAssetMatch[1];
+
   const tvsysAssetMatch = value.match(/\/assets\/([^/?#]+)/);
   if (tvsysAssetMatch?.[1]) return decodeURIComponent(tvsysAssetMatch[1]);
 
