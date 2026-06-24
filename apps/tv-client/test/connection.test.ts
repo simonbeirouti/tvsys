@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_CANVAS } from "@tvsys/shared";
+import { detectDisplayCapabilities } from "../src/capabilities.js";
 import { buildDisplayWsUrl, buildDisplayWsUrlWithToken, nextReconnectDelay, shouldApplySceneVersion } from "../src/connection.js";
+import { createHeartbeatMessage } from "../src/socket.js";
 
 describe("display connection helpers", () => {
   it("builds display websocket URLs", () => {
@@ -16,5 +19,45 @@ describe("display connection helpers", () => {
   it("ignores stale scene versions", () => {
     expect(shouldApplySceneVersion(3, 2)).toBe(true);
     expect(shouldApplySceneVersion(2, 2)).toBe(false);
+  });
+
+  it("detects visual viewport capabilities first", () => {
+    const capabilities = detectDisplayCapabilities({
+      visualViewport: { width: 1365.6, height: 767.8 },
+      innerWidth: 1920,
+      innerHeight: 1080,
+      screen: { width: 3840, height: 2160 },
+      devicePixelRatio: 1.25,
+      document: {
+        createElement: () => ({ canPlayType: () => "" })
+      }
+    });
+
+    expect(capabilities.canvas).toEqual({ width: 1366, height: 768 });
+    expect(capabilities.viewport).toEqual({ width: 1366, height: 768 });
+    expect(capabilities.screen).toEqual({ width: 3840, height: 2160 });
+    expect(capabilities.devicePixelRatio).toBe(1.25);
+    expect(capabilities.orientation).toBe("landscape");
+    expect(capabilities.supportsVideo).toBe(true);
+  });
+
+  it("falls back through window, document, screen, then default canvas", () => {
+    expect(detectDisplayCapabilities({ innerWidth: 1024, innerHeight: 768 }).canvas).toEqual({ width: 1024, height: 768 });
+    expect(
+      detectDisplayCapabilities({
+        document: { documentElement: { clientWidth: 800, clientHeight: 1280 } }
+      }).canvas
+    ).toEqual({ width: 800, height: 1280 });
+    expect(detectDisplayCapabilities({ screen: { width: 720, height: 1280 } }).canvas).toEqual({ width: 720, height: 1280 });
+    expect(detectDisplayCapabilities({}).canvas).toEqual(DEFAULT_CANVAS);
+  });
+
+  it("builds heartbeat messages with refreshed capabilities", () => {
+    const heartbeat = createHeartbeatMessage("display-1");
+
+    expect(heartbeat.type).toBe("heartbeat");
+    expect(heartbeat.displayId).toBe("display-1");
+    expect(heartbeat.capabilities?.canvas).toEqual(DEFAULT_CANVAS);
+    expect(new Date(heartbeat.at).toString()).not.toBe("Invalid Date");
   });
 });

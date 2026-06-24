@@ -48,9 +48,11 @@ export const validateCapabilities = (value) => {
     if (!isObject(value))
         return false;
     const capabilities = value;
-    return (isObject(capabilities.canvas) &&
-        isPositiveNumber(capabilities.canvas.width) &&
-        isPositiveNumber(capabilities.canvas.height) &&
+    return (isSize(capabilities.canvas) &&
+        (capabilities.viewport === undefined || isSize(capabilities.viewport)) &&
+        (capabilities.screen === undefined || isSize(capabilities.screen)) &&
+        (capabilities.devicePixelRatio === undefined || isPositiveNumber(capabilities.devicePixelRatio)) &&
+        (capabilities.orientation === undefined || ["landscape", "portrait", "square"].includes(capabilities.orientation)) &&
         typeof capabilities.supportsVideo === "boolean" &&
         typeof capabilities.supportsPixi === "boolean");
 };
@@ -93,5 +95,6 @@ const validateLayer = (value, index) => {
     return errors;
 };
 const isObject = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+const isSize = (value) => isObject(value) && isPositiveNumber(value.width) && isPositiveNumber(value.height);
 const isNonEmptyString = (value) => typeof value === "string" && value.trim().length > 0;
 const isPositiveNumber = (value) => typeof value === "number" && Number.isFinite(value) && value > 0;

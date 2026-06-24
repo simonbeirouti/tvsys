@@ -154,13 +154,15 @@ export class Store {
     return displayStatusFromDeviceRow(row);
   }
 
-  async updateHeartbeat(ownerUserId: string, displayId: string): Promise<DisplayRecord | undefined> {
+  async updateHeartbeat(ownerUserId: string, displayId: string, capabilities?: DisplayCapabilities): Promise<DisplayRecord | undefined> {
     const existing = await this.getDisplay(ownerUserId, displayId);
     if (!existing) return undefined;
+    const now = new Date().toISOString();
     const row = await this.updateOne<DeviceRow>("devices", displayId, {
       online: true,
-      last_heartbeat_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
+      last_heartbeat_at: now,
+      ...(capabilities ? { capabilities_json: capabilities } : {}),
+      updated_at: now
     });
     return displayStatusFromDeviceRow(row);
   }

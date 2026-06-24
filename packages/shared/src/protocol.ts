@@ -12,6 +12,7 @@ export interface HeartbeatMessage {
   type: "heartbeat";
   displayId: string;
   at: string;
+  capabilities?: DisplayCapabilities;
 }
 
 export interface SceneUpdateMessage {

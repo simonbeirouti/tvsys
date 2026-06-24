@@ -16,7 +16,7 @@ import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { ControllerApi } from "./api.js";
 import { controllerQueryKeys, upsertDisplay } from "./query.js";
-import { addImageLayer, createEditableScene, sceneAssetReference, updateFirstLayer } from "./sceneFactory.js";
+import { addImageLayer, createEditableScene, fallbackCanvas, getCapabilityCanvas, resizeSceneToCanvas, sceneAssetReference, updateFirstLayer } from "./sceneFactory.js";
 import { connectControllerSocket } from "./ws.js";
 
 const DEFAULT_SERVER_URL = "http://localhost:8787";
@@ -171,6 +171,8 @@ export const App = () => {
     if (screenFilter === "offline") return !display.online;
     return true;
   });
+  const selectedCapabilityCanvas = getCapabilityCanvas(selected?.capabilities);
+  const editorCanvas = selectedCapabilityCanvas ?? fallbackCanvas();
   const textLayer = scene.layers.find((layer) => layer.type === "text");
   const backgroundLayer = scene.layers.find((layer) => layer.type === "background");
   const shapeLayer = scene.layers.find((layer) => layer.type === "shape");
@@ -198,6 +200,10 @@ export const App = () => {
       positionLabel: selected.positionLabel ?? ""
     });
   }, [selected]);
+
+  useEffect(() => {
+    setScene((current) => resizeSceneToCanvas(current, editorCanvas));
+  }, [editorCanvas.height, editorCanvas.width]);
 
   const createDisplayMutation = useMutation({
     mutationFn: () =>
@@ -449,7 +455,7 @@ export const App = () => {
             <CardDescription>{scene.title}</CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="aspect-video overflow-hidden rounded-lg bg-slate-950">
+            <div className="overflow-hidden rounded-lg bg-slate-950" style={{ aspectRatio: `${scene.canvas.width} / ${scene.canvas.height}` }}>
               <div className="relative size-full" style={{ background: scene.backgroundColor }}>
                 {scene.layers.map((layer) => (
                   <div
@@ -555,6 +561,8 @@ export const App = () => {
                 <Separator />
                 <dl className="grid grid-cols-2 gap-3 text-sm">
                   <Stat label="Heartbeat" value={selected.lastHeartbeatAt ? new Date(selected.lastHeartbeatAt).toLocaleString() : "never"} />
+                  <Stat label="Resolution" value={`${formatCanvas(editorCanvas)}${selectedCapabilityCanvas ? "" : " (default)"}`} />
+                  <Stat label="Aspect" value={aspectRatioLabel(editorCanvas)} />
                   <Stat label="App" value={selected.appVersion ?? "unknown"} />
                   <Stat label="Scene" value={`v${selected.currentSceneVersion}`} />
                   <Stat label="Ack" value={String(selected.lastAckVersion ?? "none")} />
@@ -593,6 +601,24 @@ const Stat = ({ label, value }: { label: string; value: string }) => (
     <dd className="font-medium">{value}</dd>
   </div>
 );
+
+const formatCanvas = (canvas: Scene["canvas"]): string => `${canvas.width} x ${canvas.height}`;
+
+const aspectRatioLabel = (canvas: Scene["canvas"]): string => {
+  const divisor = gcd(canvas.width, canvas.height);
+  return `${canvas.width / divisor}:${canvas.height / divisor}`;
+};
+
+const gcd = (a: number, b: number): number => {
+  let left = Math.abs(Math.round(a));
+  let right = Math.abs(Math.round(b));
+  while (right) {
+    const next = left % right;
+    left = right;
+    right = next;
+  }
+  return left || 1;
+};
 
 const getAuthRedirectTo = (): string => {
   const url = new URL(window.location.href);

@@ -198,7 +198,8 @@ export class SignageHub {
 
   private async handleDisplayMessage(context: AuthContext, message: DisplayToServerMessage): Promise<void> {
     if (message.type === "heartbeat") {
-      const display = await this.store.updateHeartbeat(context.user.id, message.displayId);
+      const capabilities = message.capabilities && validateCapabilities(message.capabilities) ? message.capabilities : undefined;
+      const display = await this.store.updateHeartbeat(context.user.id, message.displayId, capabilities);
       if (display) this.broadcastStatus(display);
       return;
     }

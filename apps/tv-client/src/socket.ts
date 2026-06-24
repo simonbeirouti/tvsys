@@ -1,11 +1,11 @@
 import {
-  DEFAULT_CANVAS,
-  type DisplayCapabilities,
+  type HeartbeatMessage,
   type RenderAckMessage,
   type RenderErrorMessage,
   type Scene,
   type ServerToDisplayMessage
 } from "@tvsys/shared";
+import { detectDisplayCapabilities } from "./capabilities.js";
 import { buildDisplayWsUrlWithToken, nextReconnectDelay, type DisplayConfig } from "./connection.js";
 
 export interface DisplaySocketOptions {
@@ -46,7 +46,7 @@ export const connectDisplaySocket = (options: DisplaySocketOptions): DisplaySock
           displayId: options.config.displayId,
           installationId: options.config.installationId,
           appVersion: APP_VERSION,
-          capabilities: detectCapabilities()
+          capabilities: detectDisplayCapabilities()
         })
       );
       heartbeatTimer = window.setInterval(sendHeartbeat, 30_000);
@@ -71,11 +71,7 @@ export const connectDisplaySocket = (options: DisplaySocketOptions): DisplaySock
   };
 
   const sendHeartbeat = () => {
-    send({
-      type: "heartbeat",
-      displayId: options.config.displayId,
-      at: new Date().toISOString()
-    });
+    send(createHeartbeatMessage(options.config.displayId));
   };
 
   const handleMessage = async (raw: string) => {
@@ -102,7 +98,7 @@ export const connectDisplaySocket = (options: DisplaySocketOptions): DisplaySock
     }
   };
 
-  const send = (message: RenderAckMessage | RenderErrorMessage | { type: "heartbeat"; displayId: string; at: string }) => {
+  const send = (message: HeartbeatMessage | RenderAckMessage | RenderErrorMessage) => {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   };
 
@@ -117,8 +113,9 @@ export const connectDisplaySocket = (options: DisplaySocketOptions): DisplaySock
   };
 };
 
-const detectCapabilities = (): DisplayCapabilities => ({
-  canvas: { ...DEFAULT_CANVAS },
-  supportsVideo: Boolean(document.createElement("video").canPlayType),
-  supportsPixi: true
+export const createHeartbeatMessage = (displayId: string): HeartbeatMessage => ({
+  type: "heartbeat",
+  displayId,
+  at: new Date().toISOString(),
+  capabilities: detectDisplayCapabilities()
 });

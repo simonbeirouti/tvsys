@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type * as React from "react";
-import { bearerAuthorization, createTvsysSupabaseClient, DEFAULT_CANVAS, type DisplayCapabilities, type DisplayStatus, type Scene } from "@tvsys/shared";
+import { bearerAuthorization, createTvsysSupabaseClient, type DisplayStatus, type Scene } from "@tvsys/shared";
 import { Badge } from "@tvsys/ui/components/badge";
 import { Button } from "@tvsys/ui/components/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@tvsys/ui/components/card";
@@ -16,6 +16,7 @@ import {
   shouldApplySceneVersion,
   type DisplayConfig
 } from "./connection.js";
+import { detectDisplayCapabilities } from "./capabilities.js";
 import { SceneAnimationStyles, SceneRenderer } from "./SceneRenderer.js";
 import { connectDisplaySocket } from "./socket.js";
 
@@ -384,7 +385,7 @@ const createActivation = async (serverUrl: string, accessToken: string, installa
     body: JSON.stringify({
       installationId,
       appVersion: APP_VERSION,
-      capabilities: detectCapabilities()
+      capabilities: detectDisplayCapabilities()
     })
   });
   if (!response.ok) throw new Error(await response.text());
@@ -417,12 +418,6 @@ const getCurrentScene = async (
   if (!response.ok) throw new Error(await response.text());
   return (await response.json()) as { scene: Scene | null; sceneVersion: number };
 };
-
-const detectCapabilities = (): DisplayCapabilities => ({
-  canvas: { ...DEFAULT_CANVAS },
-  supportsVideo: Boolean(document.createElement("video").canPlayType),
-  supportsPixi: true
-});
 
 const Field = ({ label, htmlFor, children }: { label: string; htmlFor: string; children: React.ReactNode }) => (
   <div className="grid gap-2">

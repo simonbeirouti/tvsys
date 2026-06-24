@@ -55,9 +55,11 @@ export const validateCapabilities = (value: unknown): value is DisplayCapabiliti
   if (!isObject(value)) return false;
   const capabilities = value as Partial<DisplayCapabilities>;
   return (
-    isObject(capabilities.canvas) &&
-    isPositiveNumber(capabilities.canvas.width) &&
-    isPositiveNumber(capabilities.canvas.height) &&
+    isSize(capabilities.canvas) &&
+    (capabilities.viewport === undefined || isSize(capabilities.viewport)) &&
+    (capabilities.screen === undefined || isSize(capabilities.screen)) &&
+    (capabilities.devicePixelRatio === undefined || isPositiveNumber(capabilities.devicePixelRatio)) &&
+    (capabilities.orientation === undefined || ["landscape", "portrait", "square"].includes(capabilities.orientation)) &&
     typeof capabilities.supportsVideo === "boolean" &&
     typeof capabilities.supportsPixi === "boolean"
   );
@@ -105,6 +107,9 @@ const validateLayer = (value: unknown, index: number): string[] => {
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const isSize = (value: unknown): value is DisplayCapabilities["canvas"] =>
+  isObject(value) && isPositiveNumber(value.width) && isPositiveNumber(value.height);
 
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === "string" && value.trim().length > 0;

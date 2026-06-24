@@ -78,11 +78,17 @@ export interface Scene {
     createdAt?: string;
     updatedAt?: string;
 }
+export interface DisplaySize {
+    width: number;
+    height: number;
+}
+export type DisplayOrientation = "landscape" | "portrait" | "square";
 export interface DisplayCapabilities {
-    canvas: {
-        width: number;
-        height: number;
-    };
+    canvas: DisplaySize;
+    viewport?: DisplaySize;
+    screen?: DisplaySize;
+    devicePixelRatio?: number;
+    orientation?: DisplayOrientation;
     supportsVideo: boolean;
     supportsPixi: boolean;
 }
