@@ -16,7 +16,7 @@ export interface SidebarUser {
   avatar?: string;
 }
 
-export function NavUser({ user }: { user: SidebarUser }) {
+export function NavUser({ onSignOut, user }: { onSignOut?: () => void; user: SidebarUser }) {
   const { isMobile } = useSidebar();
   const fallback = user.name
     .split(" ")
@@ -77,7 +77,7 @@ export function NavUser({ user }: { user: SidebarUser }) {
               Notifications
             </DropdownMenuItem>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem onSelect={onSignOut}>
               <LogOut />
               Log out
             </DropdownMenuItem>

@@ -44,11 +44,13 @@ export interface AppSidebarProps extends React.ComponentProps<typeof Sidebar> {
   selectedCompanyId: string;
   selectedDisplayId: string;
   screenFilter: "all" | "online" | "offline";
+  onSignOut?: () => void;
 }
 
 export function AppSidebar({
   companies,
   companyDisplays,
+  onSignOut,
   user,
   selectedCompanyId,
   selectedDisplayId,
@@ -69,7 +71,7 @@ export function AppSidebar({
   return (
     <Sidebar variant="inset" collapsible="icon" {...props}>
       <SidebarHeader>
-        <NavUser user={user} />
+        <NavUser onSignOut={onSignOut} user={user} />
       </SidebarHeader>
       <SidebarContent>
         <SidebarGroup>
