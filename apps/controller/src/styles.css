@@ -1,0 +1,14 @@
+html {
+  background: var(--background);
+  height: 100%;
+}
+
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+#root {
+  height: 100svh;
+}

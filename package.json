@@ -1,0 +1,24 @@
+{
+  "name": "tvsys",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.30.1",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @tvsys/server --filter @tvsys/controller --filter @tvsys/tv-client dev",
+    "build": "pnpm -r build",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "supabase:db:push": "supabase --workdir packages/shared db push",
+    "supabase:migration:list": "supabase --workdir packages/shared migration list"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.0"
+  },
+  "dockerfile": {
+    "cmd": "node apps/server/dist/index.js",
+    "port": 8080
+  }
+}

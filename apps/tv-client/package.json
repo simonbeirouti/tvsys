@@ -1,0 +1,30 @@
+{
+  "name": "@tvsys/tv-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0 --port 5174",
+    "build": "tsc -p tsconfig.json && vite build",
+    "prepare:tizen": "node scripts/prepare-tizen.mjs",
+    "package:tizen": "pnpm build && pnpm prepare:tizen",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@tvsys/shared": "workspace:*",
+    "@tvsys/ui": "workspace:*",
+    "@vitejs/plugin-react": "^4.5.0",
+    "pixi.js": "^8.9.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "vite": "^5.4.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.1",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "tailwindcss": "^4.3.1",
+    "vitest": "^3.2.0"
+  }
+}

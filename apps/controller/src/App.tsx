@@ -1,0 +1,489 @@
+import type { DisplayStatus, Scene } from "@tvsys/shared";
+import { createTvsysSupabaseClient } from "@tvsys/shared";
+import { Alert, AlertDescription, AlertTitle } from "@tvsys/ui/components/alert";
+import { Badge } from "@tvsys/ui/components/badge";
+import { Button } from "@tvsys/ui/components/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@tvsys/ui/components/card";
+import { Input } from "@tvsys/ui/components/input";
+import { InputOTP, InputOTPGroup, InputOTPSlot } from "@tvsys/ui/components/input-otp";
+import { Label } from "@tvsys/ui/components/label";
+import { Separator } from "@tvsys/ui/components/separator";
+import { Slider } from "@tvsys/ui/components/slider";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
+import { ImagePlus, LogOut, Monitor, Plus, Save, Send, Upload } from "lucide-react";
+import type * as React from "react";
+import { useEffect, useMemo, useState } from "react";
+import { ControllerApi } from "./api.js";
+import { controllerQueryKeys, upsertDisplay } from "./query.js";
+import { addImageLayer, createEditableScene, updateFirstLayer } from "./sceneFactory.js";
+import { connectControllerSocket } from "./ws.js";
+
+const DEFAULT_SERVER_URL = "http://localhost:8787";
+export const DEFAULT_COMPANY_ID = "owned";
+
+export type ScreenFilter = "all" | "online" | "offline";
+
+export const isScreenFilter = (value: unknown): value is ScreenFilter =>
+  value === "all" || value === "online" || value === "offline";
+
+type SessionState = {
+  accessToken: string;
+  user: {
+    id: string;
+    email?: string;
+  };
+};
+
+export const App = () => {
+  const navigate = useNavigate();
+  const params = useParams({ strict: false }) as { displayId?: string };
+  const search = useSearch({ strict: false }) as Partial<{ filter: ScreenFilter }>;
+  const queryClient = useQueryClient();
+  const [serverUrl, setServerUrl] = useState(() => localStorage.getItem("tvsys.serverUrl") ?? DEFAULT_SERVER_URL);
+  const [session, setSession] = useState<SessionState | undefined>();
+  const [authEmail, setAuthEmail] = useState("");
+  const [otp, setOtp] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [newDisplay, setNewDisplay] = useState({ id: "", name: "", groupName: "", positionLabel: "" });
+  const [selectedDraft, setSelectedDraft] = useState({ name: "", groupName: "", positionLabel: "" });
+  const [scene, setScene] = useState<Scene>(() => createEditableScene());
+  const [logs, setLogs] = useState<string[]>([]);
+  const selectedDisplayId = params.displayId ?? "";
+  const screenFilter = isScreenFilter(search.filter) ? search.filter : "all";
+  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
+  const supabaseKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY as string | undefined;
+  const supabase = useMemo(
+    () =>
+      supabaseUrl && supabaseKey
+        ? createTvsysSupabaseClient(supabaseUrl, supabaseKey, {
+            auth: { autoRefreshToken: true, persistSession: true }
+          })
+        : undefined,
+    [supabaseKey, supabaseUrl]
+  );
+
+  const userId = session?.user.id ?? "anonymous";
+  const api = useMemo(
+    () =>
+      new ControllerApi(serverUrl.replace(/\/$/, ""), async () => {
+        const fresh = await supabase?.auth.getSession();
+        return fresh?.data.session?.access_token ?? session?.accessToken;
+      }),
+    [serverUrl, session?.accessToken, supabase]
+  );
+
+  const addLog = (message: string) => {
+    setLogs((current) => [`${new Date().toLocaleTimeString()} ${message}`, ...current].slice(0, 8));
+  };
+
+  useEffect(() => {
+    localStorage.setItem("tvsys.serverUrl", serverUrl);
+  }, [serverUrl]);
+
+  useEffect(() => {
+    if (!supabase) return;
+    void supabase.auth.getSession().then(({ data }) => {
+      const current = data.session;
+      if (current) setSession({ accessToken: current.access_token, user: { id: current.user.id, email: current.user.email } });
+    });
+    const { data } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      if (nextSession) {
+        setSession({ accessToken: nextSession.access_token, user: { id: nextSession.user.id, email: nextSession.user.email } });
+      } else {
+        setSession(undefined);
+        queryClient.clear();
+      }
+    });
+    return () => data.subscription.unsubscribe();
+  }, [queryClient, supabase]);
+
+  const meQuery = useQuery({
+    queryKey: controllerQueryKeys.me(userId),
+    queryFn: () => api.me(),
+    enabled: Boolean(session)
+  });
+
+  const displaysQuery = useQuery({
+    queryKey: controllerQueryKeys.displays(userId),
+    queryFn: () => api.listDisplays(),
+    enabled: Boolean(session)
+  });
+
+  const displays = displaysQuery.data ?? [];
+  const selected = displays.find((display) => display.id === selectedDisplayId);
+  const filteredDisplays = displays.filter((display) => {
+    if (screenFilter === "online") return display.online;
+    if (screenFilter === "offline") return !display.online;
+    return true;
+  });
+  const textLayer = scene.layers.find((layer) => layer.type === "text");
+  const backgroundLayer = scene.layers.find((layer) => layer.type === "background");
+  const shapeLayer = scene.layers.find((layer) => layer.type === "shape");
+
+  useEffect(() => {
+    if (!session) return;
+    return connectControllerSocket(
+      serverUrl,
+      session.accessToken,
+      (nextDisplays) => queryClient.setQueryData(controllerQueryKeys.displays(userId), nextDisplays),
+      (display) => queryClient.setQueryData(controllerQueryKeys.displays(userId), (current: DisplayStatus[] | undefined) => upsertDisplay(current, display)),
+      addLog
+    );
+  }, [queryClient, serverUrl, session, userId]);
+
+  useEffect(() => {
+    if (!selected) return;
+    setSelectedDraft({
+      name: selected.name ?? "",
+      groupName: selected.groupName ?? "",
+      positionLabel: selected.positionLabel ?? ""
+    });
+  }, [selected]);
+
+  const createDisplayMutation = useMutation({
+    mutationFn: () =>
+      api.createDisplay({
+        id: newDisplay.id.trim(),
+        name: newDisplay.name.trim() || undefined,
+        groupName: newDisplay.groupName.trim() || undefined,
+        positionLabel: newDisplay.positionLabel.trim() || undefined
+      }),
+    onSuccess: (display) => {
+      queryClient.setQueryData(controllerQueryKeys.displays(userId), (current: DisplayStatus[] | undefined) => upsertDisplay(current, display));
+      setNewDisplay({ id: "", name: "", groupName: "", positionLabel: "" });
+      addLog(`Created ${display.name ?? display.id}`);
+      void navigate({ to: "/companies/$companyId/displays/$displayId", params: { companyId: DEFAULT_COMPANY_ID, displayId: display.id }, search: { filter: "all" } });
+    },
+    onError: (error) => addLog(error instanceof Error ? error.message : "Could not create display")
+  });
+
+  const updateDisplayMutation = useMutation({
+    mutationFn: () => {
+      if (!selected) throw new Error("Select a display first");
+      return api.updateDisplay(selected.id, selectedDraft);
+    },
+    onSuccess: (display) => {
+      queryClient.setQueryData(controllerQueryKeys.displays(userId), (current: DisplayStatus[] | undefined) => upsertDisplay(current, display));
+      addLog(`Updated ${display.name ?? display.id}`);
+    },
+    onError: (error) => addLog(error instanceof Error ? error.message : "Could not update display")
+  });
+
+  const uploadAssetMutation = useMutation({
+    mutationFn: (file: File) => api.uploadAsset(file),
+    onSuccess: (assetUrl, file) => {
+      setScene((current) => addImageLayer(current, assetUrl));
+      addLog(`Uploaded ${file.name}`);
+    },
+    onError: (error) => addLog(error instanceof Error ? error.message : "Could not upload asset")
+  });
+
+  const sendSceneMutation = useMutation({
+    mutationFn: () => {
+      if (!selected) throw new Error("Select a display first");
+      return api.sendScene(selected.id, scene);
+    },
+    onSuccess: () => addLog(`Sent scene to ${selected?.name ?? selected?.id}`),
+    onError: (error) => addLog(error instanceof Error ? error.message : "Could not send scene")
+  });
+
+  const broadcastSceneMutation = useMutation({
+    mutationFn: () => api.broadcastScene(scene),
+    onSuccess: () => addLog("Broadcast scene to all owned displays"),
+    onError: (error) => addLog(error instanceof Error ? error.message : "Could not broadcast scene")
+  });
+
+  const requestOtp = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!supabase) return;
+    setAuthError("");
+    const { error } = await supabase.auth.signInWithOtp({ email: authEmail.trim() });
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+    setOtpSent(true);
+  };
+
+  const verifyOtp = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!supabase) return;
+    setAuthError("");
+    const { data, error } = await supabase.auth.verifyOtp({ email: authEmail.trim(), token: otp, type: "email" });
+    if (error) {
+      setAuthError(error.message);
+      return;
+    }
+    if (data.session) setSession({ accessToken: data.session.access_token, user: { id: data.session.user.id, email: data.session.user.email } });
+  };
+
+  const signOut = async () => {
+    await supabase?.auth.signOut();
+    queryClient.clear();
+    setSession(undefined);
+  };
+
+  if (!supabase) {
+    return (
+      <main className="grid min-h-svh place-items-center p-6">
+        <Alert className="max-w-xl">
+          <AlertTitle>Supabase is not configured</AlertTitle>
+          <AlertDescription>Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY for the controller.</AlertDescription>
+        </Alert>
+      </main>
+    );
+  }
+
+  if (!session) {
+    return (
+      <main className="grid min-h-svh place-items-center bg-background p-6">
+        <Card className="w-full max-w-md">
+          <CardHeader>
+            <CardTitle>Sign in to TVSys</CardTitle>
+            <CardDescription>Use your cafe email and the six-digit code Supabase sends you.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <form className="grid gap-4" onSubmit={otpSent ? verifyOtp : requestOtp}>
+              <Field label="Server URL" htmlFor="server-url">
+                <Input id="server-url" value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} />
+              </Field>
+              <Field label="Email" htmlFor="email">
+                <Input id="email" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} />
+              </Field>
+              {otpSent ? (
+                <div className="grid gap-2">
+                  <Label>Six-digit code</Label>
+                  <InputOTP maxLength={6} value={otp} onChange={setOtp}>
+                    <InputOTPGroup>
+                      {[0, 1, 2, 3, 4, 5].map((index) => (
+                        <InputOTPSlot index={index} key={index} />
+                      ))}
+                    </InputOTPGroup>
+                  </InputOTP>
+                </div>
+              ) : null}
+              {authError ? <p className="text-sm text-destructive">{authError}</p> : null}
+              <Button type="submit" disabled={!authEmail || (otpSent && otp.length !== 6)}>
+                {otpSent ? "Verify code" : "Send code"}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </main>
+    );
+  }
+
+  return (
+    <main className="grid min-h-svh gap-4 bg-background p-4 text-foreground lg:grid-cols-[320px_minmax(0,1fr)_320px]">
+      <aside className="grid content-start gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{meQuery.data?.cafe.name ?? "Cafe"}</CardTitle>
+            <CardDescription>{session.user.email}</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            <Input value={serverUrl} onChange={(event) => setServerUrl(event.target.value)} aria-label="Server URL" />
+            <Button variant="outline" onClick={() => void signOut()}>
+              <LogOut />
+              Sign out
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Displays</CardTitle>
+            <CardDescription>{displays.length} owned devices</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            <div className="flex gap-1">
+              {(["all", "online", "offline"] as const).map((filter) => (
+                <Button
+                  key={filter}
+                  size="sm"
+                  variant={screenFilter === filter ? "secondary" : "ghost"}
+                  onClick={() => void navigate({ to: "/companies/$companyId", params: { companyId: DEFAULT_COMPANY_ID }, search: { filter } })}
+                >
+                  {filter}
+                </Button>
+              ))}
+            </div>
+            <div className="grid gap-2">
+              {filteredDisplays.map((display) => (
+                <Button asChild className="justify-start" key={display.id} variant={selected?.id === display.id ? "secondary" : "outline"}>
+                  <Link to="/companies/$companyId/displays/$displayId" params={{ companyId: DEFAULT_COMPANY_ID, displayId: display.id }} search={{ filter: screenFilter }}>
+                    <Monitor />
+                    <span className="min-w-0 flex-1 truncate text-left">{display.name ?? display.id}</span>
+                    <Badge variant={display.online ? "default" : "outline"}>{display.online ? "online" : "offline"}</Badge>
+                  </Link>
+                </Button>
+              ))}
+            </div>
+            <Separator />
+            <div className="grid gap-2">
+              <Input placeholder="Device id" value={newDisplay.id} onChange={(event) => setNewDisplay({ ...newDisplay, id: event.target.value })} />
+              <Input placeholder="Name" value={newDisplay.name} onChange={(event) => setNewDisplay({ ...newDisplay, name: event.target.value })} />
+              <Input placeholder="Group" value={newDisplay.groupName} onChange={(event) => setNewDisplay({ ...newDisplay, groupName: event.target.value })} />
+              <Input placeholder="Position" value={newDisplay.positionLabel} onChange={(event) => setNewDisplay({ ...newDisplay, positionLabel: event.target.value })} />
+              <Button disabled={!newDisplay.id.trim()} onClick={() => createDisplayMutation.mutate()}>
+                <Plus />
+                Add device
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </aside>
+
+      <section className="grid content-start gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>Scene preview</CardTitle>
+            <CardDescription>{scene.title}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="aspect-video overflow-hidden rounded-lg bg-slate-950">
+              <div className="relative size-full" style={{ background: scene.backgroundColor }}>
+                {scene.layers.map((layer) => (
+                  <div
+                    className={`absolute overflow-hidden text-white ${layer.type === "text" ? "flex items-center font-bold" : ""}`}
+                    key={layer.id}
+                    style={{
+                      left: `${(layer.x / scene.canvas.width) * 100}%`,
+                      top: `${(layer.y / scene.canvas.height) * 100}%`,
+                      width: `${(layer.width / scene.canvas.width) * 100}%`,
+                      height: `${(layer.height / scene.canvas.height) * 100}%`,
+                      zIndex: layer.zIndex,
+                      opacity: layer.opacity,
+                      display: layer.visible ? "block" : "none",
+                      fontSize: layer.type === "text" ? `clamp(20px, 5vw, ${layer.fontSize}px)` : undefined
+                    }}
+                  >
+                    {layer.type === "text" ? layer.text : null}
+                    {layer.type === "shape" ? <span className="block size-full" style={{ background: layer.fill, borderRadius: layer.shape === "circle" ? "50%" : 6 }} /> : null}
+                    {layer.type === "image" ? <img className="size-full object-cover" src={layer.assetUrl} alt="" /> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Scene controls</CardTitle>
+            <CardDescription>Uploads and scene delivery are scoped to your signed-in cafe.</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-4">
+            <Field label="Scene title" htmlFor="scene-title">
+              <Input id="scene-title" value={scene.title} onChange={(event) => setScene({ ...scene, title: event.target.value })} />
+            </Field>
+            <Field label="Background" htmlFor="scene-background">
+              <Input
+                className="h-9 p-1"
+                id="scene-background"
+                type="color"
+                value={(backgroundLayer?.type === "background" && backgroundLayer.color) || scene.backgroundColor || "#08131f"}
+                onChange={(event) => {
+                  setScene((current) => ({
+                    ...updateFirstLayer(current, "background", { color: event.target.value }),
+                    backgroundColor: event.target.value
+                  }));
+                }}
+              />
+            </Field>
+            <Field label="Headline" htmlFor="scene-headline">
+              <Input id="scene-headline" value={textLayer?.type === "text" ? textLayer.text : ""} onChange={(event) => setScene((current) => updateFirstLayer(current, "text", { text: event.target.value }))} />
+            </Field>
+            <div className="grid gap-2">
+              <Label>Text size</Label>
+              <Slider min={36} max={140} step={1} value={[textLayer?.type === "text" ? textLayer.fontSize : 96]} onValueChange={([value]) => setScene((current) => updateFirstLayer(current, "text", { fontSize: value ?? 96 }))} />
+            </div>
+            <Field label="Moving object color" htmlFor="shape-color">
+              <Input className="h-9 p-1" id="shape-color" type="color" value={shapeLayer?.type === "shape" ? shapeLayer.fill : "#f2c14e"} onChange={(event) => setScene((current) => updateFirstLayer(current, "shape", { fill: event.target.value }))} />
+            </Field>
+            <Button asChild variant="secondary">
+              <label>
+                <ImagePlus />
+                Add Image
+                <input className="sr-only" type="file" accept="image/*,video/*" onChange={(event) => event.target.files?.[0] && uploadAssetMutation.mutate(event.target.files[0])} />
+              </label>
+            </Button>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button disabled={!selected} onClick={() => sendSceneMutation.mutate()}>
+                <Send />
+                Send selected
+              </Button>
+              <Button variant="outline" onClick={() => broadcastSceneMutation.mutate()}>
+                <Upload />
+                Broadcast
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </section>
+
+      <aside className="grid content-start gap-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{selected ? selected.name ?? selected.id : "Device"}</CardTitle>
+            <CardDescription>{selected ? selected.id : "Select a display to edit it."}</CardDescription>
+          </CardHeader>
+          <CardContent className="grid gap-3">
+            {selected ? (
+              <>
+                <Field label="Name" htmlFor="display-name">
+                  <Input id="display-name" value={selectedDraft.name} onChange={(event) => setSelectedDraft({ ...selectedDraft, name: event.target.value })} />
+                </Field>
+                <Field label="Group" htmlFor="display-group">
+                  <Input id="display-group" value={selectedDraft.groupName} onChange={(event) => setSelectedDraft({ ...selectedDraft, groupName: event.target.value })} />
+                </Field>
+                <Field label="Position" htmlFor="display-position">
+                  <Input id="display-position" value={selectedDraft.positionLabel} onChange={(event) => setSelectedDraft({ ...selectedDraft, positionLabel: event.target.value })} />
+                </Field>
+                <Button onClick={() => updateDisplayMutation.mutate()}>
+                  <Save />
+                  Save device
+                </Button>
+                <Separator />
+                <dl className="grid grid-cols-2 gap-3 text-sm">
+                  <Stat label="Heartbeat" value={selected.lastHeartbeatAt ? new Date(selected.lastHeartbeatAt).toLocaleString() : "never"} />
+                  <Stat label="App" value={selected.appVersion ?? "unknown"} />
+                  <Stat label="Scene" value={`v${selected.currentSceneVersion}`} />
+                  <Stat label="Ack" value={String(selected.lastAckVersion ?? "none")} />
+                </dl>
+                {selected.lastError ? <p className="rounded-md bg-destructive/10 p-2 text-sm text-destructive">{selected.lastError}</p> : null}
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground">Owned devices will appear after the TV signs in or you create one here.</p>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Activity</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-2">
+            {logs.length ? logs.map((log) => <p className="text-sm text-muted-foreground" key={log}>{log}</p>) : <p className="text-sm text-muted-foreground">No activity yet.</p>}
+          </CardContent>
+        </Card>
+      </aside>
+    </main>
+  );
+};
+
+const Field = ({ label, htmlFor, children }: { label: string; htmlFor: string; children: React.ReactNode }) => (
+  <div className="grid gap-2">
+    <Label htmlFor={htmlFor}>{label}</Label>
+    {children}
+  </div>
+);
+
+const Stat = ({ label, value }: { label: string; value: string }) => (
+  <div>
+    <dt className="text-muted-foreground">{label}</dt>
+    <dd className="font-medium">{value}</dd>
+  </div>
+);

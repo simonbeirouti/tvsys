@@ -1,0 +1,35 @@
+# Dependencies
+node_modules
+
+# Environment files
+.env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Build output
+build
+dist
+!packages/shared/dist
+!packages/shared/dist/**
+
+# Caches and test output
+coverage
+.turbo
+.vite
+**/.vite
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local app state
+apps/server/data
+
+# Supabase local state
+packages/shared/supabase/.temp
