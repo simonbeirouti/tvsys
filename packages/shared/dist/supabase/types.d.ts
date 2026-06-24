@@ -134,6 +134,31 @@ export interface Database {
                 };
                 Update: Partial<Database["public"]["Tables"]["delivery_history"]["Insert"]>;
             };
+            display_sessions: {
+                Row: {
+                    id: string;
+                    owner_user_id: string;
+                    device_id: string;
+                    token_hash: string;
+                    created_at: string;
+                    last_seen_at: string | null;
+                    expires_at: string;
+                    rotated_at: string | null;
+                    revoked_at: string | null;
+                };
+                Insert: {
+                    id?: string;
+                    owner_user_id: string;
+                    device_id: string;
+                    token_hash: string;
+                    created_at?: string;
+                    last_seen_at?: string | null;
+                    expires_at: string;
+                    rotated_at?: string | null;
+                    revoked_at?: string | null;
+                };
+                Update: Partial<Database["public"]["Tables"]["display_sessions"]["Insert"]>;
+            };
         };
         Views: Record<string, never>;
         Functions: Record<string, never>;
@@ -152,4 +177,6 @@ export type SceneRow = Database["public"]["Tables"]["scenes"]["Row"];
 export type SceneInsert = Database["public"]["Tables"]["scenes"]["Insert"];
 export type DeliveryHistoryRow = Database["public"]["Tables"]["delivery_history"]["Row"];
 export type DeliveryHistoryInsert = Database["public"]["Tables"]["delivery_history"]["Insert"];
+export type DisplaySessionRow = Database["public"]["Tables"]["display_sessions"]["Row"];
+export type DisplaySessionInsert = Database["public"]["Tables"]["display_sessions"]["Insert"];
 //# sourceMappingURL=types.d.ts.map

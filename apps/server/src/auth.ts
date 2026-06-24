@@ -1,5 +1,5 @@
 import { bearerAuthorization, extractBearerToken, type AuthContext, type AuthenticatedUser, type CafeRow } from "@tvsys/shared";
-import type { ActivationService, DisplayTokenPayload } from "./activation.js";
+import type { DisplayTokenPayload } from "./activation.js";
 import type { ServerConfig } from "./config.js";
 import type { Store } from "./store.js";
 
@@ -15,8 +15,7 @@ export class HttpError extends Error {
 export class AuthService {
   constructor(
     private readonly config: ServerConfig,
-    private readonly store: Store,
-    private readonly activation?: ActivationService
+    private readonly store: Store
   ) {}
 
   async authenticateHeader(header: string | string[] | undefined): Promise<AuthContext> {
@@ -57,8 +56,12 @@ export class AuthService {
 
   private async authenticateDisplayTokenPayload(token: string | undefined): Promise<DisplayTokenPayload> {
     if (!token) throw new HttpError(401, "Missing display token");
-    const displayToken = this.activation?.verifyDisplayToken(token);
-    if (!displayToken) throw new HttpError(401, "Invalid display token");
-    return displayToken;
+    const session = await this.store.authenticateDisplaySession(token);
+    if (!session) throw new HttpError(401, "Invalid display token");
+    return {
+      ownerUserId: session.ownerUserId,
+      displayId: session.displayId,
+      installationId: session.installationId
+    };
   }
 }

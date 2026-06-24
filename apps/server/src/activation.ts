@@ -1,6 +1,5 @@
 import crypto from "node:crypto";
 import type { AuthenticatedUser, DisplayCapabilities } from "@tvsys/shared";
-import type { ServerConfig } from "./config.js";
 import type { DisplayRecord, Store } from "./store.js";
 
 export interface DisplayTokenPayload {
@@ -16,6 +15,7 @@ interface PendingActivation {
   createdAt: number;
   display?: DisplayRecord;
   displayToken?: string;
+  displayTokenExpiresAt?: string;
   installationId: string;
   tvUserId: string;
 }
@@ -26,7 +26,7 @@ export class ActivationService {
   private readonly pendingByCode = new Map<string, PendingActivation>();
   private readonly codeByInstallation = new Map<string, string>();
 
-  constructor(private readonly config: ServerConfig) {}
+  constructor() {}
 
   create(input: {
     appVersion: string;
@@ -52,56 +52,50 @@ export class ActivationService {
     return { code, expiresAt: new Date(activation.createdAt + ACTIVATION_TTL_MS).toISOString() };
   }
 
-  async claim(store: Store, ownerUser: AuthenticatedUser, code: string): Promise<{ display: DisplayRecord }> {
+  async claim(store: Store, ownerUser: AuthenticatedUser, code: string, displayId?: string): Promise<{ display: DisplayRecord; displayToken: string; displayTokenExpiresAt: string }> {
     this.pruneExpired();
     const activation = this.pendingByCode.get(normalizeCode(code));
     if (!activation) throw new Error("Unknown or expired linking code");
 
-    const display = await store.registerTv({
-      ownerUserId: ownerUser.id,
-      installationId: activation.installationId,
-      name: "New TV",
-      appVersion: activation.appVersion,
-      capabilities: activation.capabilities
-    });
+    const display = displayId
+      ? await store.relinkTv({
+          ownerUserId: ownerUser.id,
+          displayId,
+          installationId: activation.installationId,
+          appVersion: activation.appVersion,
+          capabilities: activation.capabilities
+        })
+      : await store.registerTv({
+          ownerUserId: ownerUser.id,
+          installationId: activation.installationId,
+          name: "New TV",
+          appVersion: activation.appVersion,
+          capabilities: activation.capabilities
+        });
+    if (!display) throw new Error(`Unknown display: ${displayId}`);
+    const session = await store.createDisplaySession(ownerUser.id, display.id);
+    if (!session) throw new Error(`Could not create display session for ${display.id}`);
     activation.display = display;
-    activation.displayToken = this.signDisplayToken({
-      ownerUserId: ownerUser.id,
-      displayId: display.id,
-      installationId: activation.installationId
-    });
-    return { display };
+    activation.displayToken = session.displayToken;
+    activation.displayTokenExpiresAt = session.expiresAt;
+    return { display, displayToken: session.displayToken, displayTokenExpiresAt: session.expiresAt };
   }
 
-  status(tvUser: AuthenticatedUser, code: string): { display?: DisplayRecord; displayToken?: string; status: "claimed" | "pending" } {
+  status(tvUser: AuthenticatedUser, code: string): { display?: DisplayRecord; displayToken?: string; displayTokenExpiresAt?: string; status: "claimed" | "pending" } {
     this.pruneExpired();
     const activation = this.pendingByCode.get(normalizeCode(code));
     if (!activation || activation.tvUserId !== tvUser.id) throw new Error("Unknown or expired linking code");
-    if (activation.display && activation.displayToken) {
+    if (activation.display && activation.displayToken && activation.displayTokenExpiresAt) {
       this.pendingByCode.delete(activation.code);
       this.codeByInstallation.delete(activation.installationId);
-      return { status: "claimed", display: activation.display, displayToken: activation.displayToken };
+      return {
+        status: "claimed",
+        display: activation.display,
+        displayToken: activation.displayToken,
+        displayTokenExpiresAt: activation.displayTokenExpiresAt
+      };
     }
     return { status: "pending" };
-  }
-
-  signDisplayToken(payload: DisplayTokenPayload): string {
-    const encodedPayload = Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
-    const signature = crypto.createHmac("sha256", this.config.supabaseServiceRoleKey).update(encodedPayload).digest("base64url");
-    return `display_${encodedPayload}.${signature}`;
-  }
-
-  verifyDisplayToken(token: string): DisplayTokenPayload | undefined {
-    if (!token.startsWith("display_")) return undefined;
-    const [encodedPayload, signature] = token.slice("display_".length).split(".");
-    if (!encodedPayload || !signature) return undefined;
-    const expected = crypto.createHmac("sha256", this.config.supabaseServiceRoleKey).update(encodedPayload).digest("base64url");
-    const signatureBuffer = Buffer.from(signature);
-    const expectedBuffer = Buffer.from(expected);
-    if (signatureBuffer.byteLength !== expectedBuffer.byteLength || !crypto.timingSafeEqual(signatureBuffer, expectedBuffer)) return undefined;
-    const payload = JSON.parse(Buffer.from(encodedPayload, "base64url").toString("utf8")) as Partial<DisplayTokenPayload>;
-    if (!payload.ownerUserId || !payload.displayId || !payload.installationId) return undefined;
-    return { ownerUserId: payload.ownerUserId, displayId: payload.displayId, installationId: payload.installationId };
   }
 
   private createCode(): string {

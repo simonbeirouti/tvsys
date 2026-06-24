@@ -55,4 +55,28 @@ describe("ControllerApi", () => {
       url: "http://localhost:8787/assets/asset-1"
     });
   });
+
+  it("sends an optional display id when relinking a TV", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        display: {
+          id: "display-1",
+          online: true,
+          currentSceneVersion: 0
+        }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const api = new ControllerApi("http://localhost:8787", async () => "access-token");
+    await api.linkTv("123456", "display-1");
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://localhost:8787/api/tv/activation/claim",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ code: "123456", displayId: "display-1" })
+      })
+    );
+  });
 });

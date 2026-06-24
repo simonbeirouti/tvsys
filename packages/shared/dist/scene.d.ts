@@ -5,6 +5,8 @@ export declare const DEFAULT_CANVAS: {
 export type LayerType = "background" | "text" | "image" | "video" | "shape" | "sprite";
 export type AnimationType = "move" | "fade" | "scale" | "rotate";
 export type AnimationEasing = "linear" | "ease" | "ease-in" | "ease-out" | "ease-in-out";
+export type MotionPreset = "none" | "slide" | "pulse" | "fade" | "rotate";
+export declare const MOTION_PRESETS: readonly ["none", "slide", "pulse", "fade", "rotate"];
 export interface LayerAnimation {
     type: AnimationType;
     durationMs: number;
@@ -93,5 +95,13 @@ export interface DisplayCapabilities {
     supportsPixi: boolean;
 }
 export declare const createDefaultScene: (title?: string) => Scene;
+export declare const createBlankScene: (title?: string, backgroundColor?: string) => Scene;
+export declare const createBackgroundLayer: (input?: Partial<BackgroundLayer>) => BackgroundLayer;
+export declare const createTextLayer: (input?: Partial<TextLayer>) => TextLayer;
+export declare const createMediaLayer: (input: Partial<MediaLayer> & Pick<MediaLayer, "assetUrl"> & {
+    type?: MediaLayer["type"];
+}) => MediaLayer;
+export declare const createShapeLayer: (input?: Partial<ShapeLayer>) => ShapeLayer;
+export declare const createMotionAnimation: (preset: MotionPreset, layer: Pick<BaseLayer, "x" | "y" | "opacity" | "rotation">, input?: Partial<LayerAnimation>) => LayerAnimation | undefined;
 export declare const cryptoRandomId: (prefix: string) => string;
 //# sourceMappingURL=scene.d.ts.map

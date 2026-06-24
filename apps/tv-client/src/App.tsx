@@ -13,7 +13,9 @@ import {
   loadDisplayConfig,
   loadOrCreateInstallationId,
   saveDisplayConfig,
+  shouldRefreshDisplayToken,
   shouldApplySceneVersion,
+  withRefreshedDisplayToken,
   type DisplayConfig
 } from "./connection.js";
 import { detectDisplayCapabilities } from "./capabilities.js";
@@ -164,6 +166,7 @@ export const App = () => {
           serverUrl: trimmedServerUrl,
           displayId: result.display.id,
           displayAuthToken: result.displayToken,
+          displayTokenExpiresAt: result.displayTokenExpiresAt,
           installationId
         };
         saveDisplayConfig(clean);
@@ -193,6 +196,36 @@ export const App = () => {
     });
     return () => handle.close();
   }, [config, renderScene]);
+
+  useEffect(() => {
+    if (!config) return;
+    let stopped = false;
+    const refresh = async () => {
+      if (!shouldRefreshDisplayToken(config)) return;
+      try {
+        const refreshed = await refreshDisplaySession(config.serverUrl, config.displayAuthToken);
+        if (stopped) return;
+        const nextConfig = withRefreshedDisplayToken(config, refreshed.displayToken, refreshed.expiresAt);
+        saveDisplayConfig(nextConfig);
+        setConfig(nextConfig);
+      } catch (error) {
+        if (stopped) return;
+        clearDisplayConfig();
+        setConfig(undefined);
+        setScene(undefined);
+        sceneVersionRef.current = 0;
+        setSceneVersion(0);
+        setStatus("Display session expired");
+        setAuthError(error instanceof Error ? error.message : "Display session expired");
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 60 * 60 * 1000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [config]);
 
   useEffect(() => {
     if (!config) return;
@@ -396,14 +429,28 @@ const getActivationStatus = async (
   serverUrl: string,
   accessToken: string,
   code: string
-): Promise<{ display?: DisplayStatus; displayToken?: string; status: "claimed" | "pending" }> => {
+): Promise<{ display?: DisplayStatus; displayToken?: string; displayTokenExpiresAt?: string; status: "claimed" | "pending" }> => {
   const response = await fetch(`${serverUrl.replace(/\/$/, "")}/api/tv/activation/status?code=${encodeURIComponent(code)}`, {
     headers: {
       authorization: bearerAuthorization(accessToken)
     }
   });
   if (!response.ok) throw new Error(await response.text());
-  return (await response.json()) as { display?: DisplayStatus; displayToken?: string; status: "claimed" | "pending" };
+  return (await response.json()) as { display?: DisplayStatus; displayToken?: string; displayTokenExpiresAt?: string; status: "claimed" | "pending" };
+};
+
+const refreshDisplaySession = async (
+  serverUrl: string,
+  displayAuthToken: string
+): Promise<{ displayToken: string; expiresAt: string }> => {
+  const response = await fetch(`${serverUrl.replace(/\/$/, "")}/api/tv/session/refresh`, {
+    method: "POST",
+    headers: {
+      authorization: bearerAuthorization(displayAuthToken)
+    }
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return (await response.json()) as { displayToken: string; expiresAt: string };
 };
 
 const getCurrentScene = async (

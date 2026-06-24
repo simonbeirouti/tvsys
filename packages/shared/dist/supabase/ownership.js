@@ -44,3 +44,14 @@ export const deliveryFromRow = (row) => ({
     acknowledgedAt: row.acknowledged_at ?? undefined,
     error: row.error ?? undefined
 });
+export const displaySessionFromRow = (row) => ({
+    id: row.id,
+    ownerUserId: row.owner_user_id,
+    deviceId: row.device_id,
+    tokenHash: row.token_hash,
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at ?? undefined,
+    expiresAt: row.expires_at,
+    rotatedAt: row.rotated_at ?? undefined,
+    revokedAt: row.revoked_at ?? undefined
+});

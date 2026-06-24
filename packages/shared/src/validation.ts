@@ -100,6 +100,12 @@ const validateLayer = (value: unknown, index: number): string[] => {
     if (!isPositiveNumber(layer.animation.durationMs)) {
       errors.push(`${prefix} animation durationMs must be positive`);
     }
+    if (
+      layer.animation.easing !== undefined &&
+      !["linear", "ease", "ease-in", "ease-out", "ease-in-out"].includes(String(layer.animation.easing))
+    ) {
+      errors.push(`${prefix} animation easing is unsupported`);
+    }
   }
 
   return errors;

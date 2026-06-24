@@ -1,6 +1,6 @@
 import type { DisplayStatus } from "../protocol.js";
 import type { Scene } from "../scene.js";
-import type { AssetRow, CafeRow, DeliveryHistoryRow, DeviceRow, SceneRow } from "./types.js";
+import type { AssetRow, CafeRow, DeliveryHistoryRow, DeviceRow, DisplaySessionRow, SceneRow } from "./types.js";
 
 export type OwnerUserId = string;
 export type InstallationId = string;
@@ -43,6 +43,29 @@ export interface OwnedScene {
   scene: Scene;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface OwnedDelivery {
+  id: string;
+  ownerUserId: OwnerUserId;
+  deviceId: DeviceId;
+  sceneId: SceneId;
+  sceneVersion: number;
+  deliveredAt: string;
+  acknowledgedAt?: string;
+  error?: string;
+}
+
+export interface OwnedDisplaySession {
+  id: string;
+  ownerUserId: OwnerUserId;
+  deviceId: DeviceId;
+  tokenHash: string;
+  createdAt: string;
+  lastSeenAt?: string;
+  expiresAt: string;
+  rotatedAt?: string;
+  revokedAt?: string;
 }
 
 export interface TvRegistration {
@@ -92,7 +115,7 @@ export const sceneFromRow = (row: SceneRow): OwnedScene => ({
   updatedAt: row.updated_at
 });
 
-export const deliveryFromRow = (row: DeliveryHistoryRow) => ({
+export const deliveryFromRow = (row: DeliveryHistoryRow): OwnedDelivery => ({
   id: row.id,
   ownerUserId: row.owner_user_id,
   deviceId: row.device_id,
@@ -101,4 +124,16 @@ export const deliveryFromRow = (row: DeliveryHistoryRow) => ({
   deliveredAt: row.delivered_at,
   acknowledgedAt: row.acknowledged_at ?? undefined,
   error: row.error ?? undefined
+});
+
+export const displaySessionFromRow = (row: DisplaySessionRow): OwnedDisplaySession => ({
+  id: row.id,
+  ownerUserId: row.owner_user_id,
+  deviceId: row.device_id,
+  tokenHash: row.token_hash,
+  createdAt: row.created_at,
+  lastSeenAt: row.last_seen_at ?? undefined,
+  expiresAt: row.expires_at,
+  rotatedAt: row.rotated_at ?? undefined,
+  revokedAt: row.revoked_at ?? undefined
 });

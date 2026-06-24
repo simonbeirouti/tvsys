@@ -1,4 +1,4 @@
-import type { DisplayStatus, Scene } from "@tvsys/shared";
+import { cryptoRandomId, type DisplayStatus, type Scene } from "@tvsys/shared";
 import { createTvsysSupabaseClient } from "@tvsys/shared";
 import { Alert, AlertDescription, AlertTitle } from "@tvsys/ui/components/alert";
 import { Badge } from "@tvsys/ui/components/badge";
@@ -9,17 +9,17 @@ import { InputOTP, InputOTPGroup, InputOTPSlot } from "@tvsys/ui/components/inpu
 import { Label } from "@tvsys/ui/components/label";
 import { Separator } from "@tvsys/ui/components/separator";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "@tvsys/ui/components/sidebar";
-import { Slider } from "@tvsys/ui/components/slider";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearch } from "@tanstack/react-router";
-import { ImagePlus, LogOut, Monitor, Plus, Save, Send, Upload } from "lucide-react";
+import { LogOut, Monitor, Plus } from "lucide-react";
 import type * as React from "react";
 import { useEffect, useMemo, useState } from "react";
 import { ControllerApi } from "./api.js";
 import { controllerQueryKeys, upsertDisplay } from "./query.js";
-import { addImageLayer, createEditableScene, getCapabilityCanvas, sceneAssetReference, updateFirstLayer } from "./sceneFactory.js";
+import { addImageLayer, createEditableScene, getCapabilityCanvas, sceneAssetReference } from "./sceneFactory.js";
 import { connectControllerSocket } from "./ws.js";
 import { AppSidebar, type Company } from "./components/app-sidebar.js";
+import { SceneEditor } from "./SceneEditor.js";
 
 const DEFAULT_SERVER_URL = "http://localhost:8787";
 export const DEFAULT_COMPANY_ID = "owned";
@@ -31,6 +31,11 @@ export type ScreenFilter = "all" | "online" | "offline";
 
 export const isScreenFilter = (value: unknown): value is ScreenFilter =>
   value === "all" || value === "online" || value === "offline";
+
+type AssetUploadInput = {
+  file: File;
+  position?: { x: number; y: number };
+};
 
 type SessionState = {
   accessToken: string;
@@ -166,6 +171,12 @@ export const App = () => {
     enabled: Boolean(session)
   });
 
+  const scenesQuery = useQuery({
+    queryKey: controllerQueryKeys.scenes(userId),
+    queryFn: () => api.listScenes(),
+    enabled: Boolean(session)
+  });
+
   const displays = displaysQuery.data ?? [];
   const routeCompanyId = params.companyId ?? DEFAULT_COMPANY_ID;
   const cafe = meQuery.data?.cafe;
@@ -200,15 +211,17 @@ export const App = () => {
     [companyId, displays],
   );
   const selected = displays.find((display) => display.id === selectedDisplayId);
+  const activityQuery = useQuery({
+    queryKey: [...controllerQueryKeys.displays(userId), selectedDisplayId, "activity"] as const,
+    queryFn: () => api.listDisplayActivity(selectedDisplayId),
+    enabled: Boolean(session && selectedDisplayId && selected)
+  });
   const filteredDisplays = displays.filter((display) => {
     if (screenFilter === "online") return display.online;
     if (screenFilter === "offline") return !display.online;
     return true;
   });
   const selectedCapabilityCanvas = getCapabilityCanvas(selected?.capabilities);
-  const textLayer = scene.layers.find((layer) => layer.type === "text");
-  const backgroundLayer = scene.layers.find((layer) => layer.type === "background");
-  const shapeLayer = scene.layers.find((layer) => layer.type === "shape");
   const trimmedAuthEmail = authEmail.trim();
   const trimmedOtp = otp.trim();
   const canRequestOtp = Boolean(trimmedAuthEmail);
@@ -262,6 +275,18 @@ export const App = () => {
     onError: (error) => addLog(error instanceof Error ? error.message : "Could not link TV")
   });
 
+  const relinkTvMutation = useMutation({
+    mutationFn: (code: string) => {
+      if (!selected) throw new Error("Select a display first");
+      return api.linkTv(code, selected.id);
+    },
+    onSuccess: (display) => {
+      queryClient.setQueryData(controllerQueryKeys.displays(userId), (current: DisplayStatus[] | undefined) => upsertDisplay(current, display));
+      addLog(`Relinked ${display.name ?? display.id}`);
+    },
+    onError: (error) => addLog(error instanceof Error ? error.message : "Could not relink TV")
+  });
+
   const updateDisplayMutation = useMutation({
     mutationFn: () => {
       if (!selected) throw new Error("Select a display first");
@@ -275,14 +300,27 @@ export const App = () => {
   });
 
   const uploadAssetMutation = useMutation({
-    mutationFn: (file: File) => api.uploadAsset(file),
-    onSuccess: (asset, file) => {
+    mutationFn: (input: AssetUploadInput) => api.uploadAsset(input.file),
+    onSuccess: (asset, input) => {
       const assetReference = sceneAssetReference(asset.id);
       setAssetPreviewUrls((current) => ({ ...current, [assetReference]: asset.url }));
-      setScene((current) => addImageLayer(current, assetReference));
-      addLog(`Uploaded ${file.name}`);
+      setScene((current) => addImageLayer(current, assetReference, input.position, input.file.type.startsWith("video/") ? "video" : "image"));
+      addLog(`Uploaded ${input.file.name}`);
     },
     onError: (error) => addLog(error instanceof Error ? error.message : "Could not upload asset")
+  });
+
+  const saveSceneMutation = useMutation({
+    mutationFn: (input?: Scene) => api.saveScene(input ?? scene),
+    onSuccess: (savedScene) => {
+      setScene(savedScene.scene);
+      queryClient.setQueryData(controllerQueryKeys.scenes(userId), (current: typeof scenesQuery.data | undefined) => {
+        const next = [savedScene, ...(current ?? []).filter((item) => item.id !== savedScene.id)];
+        return next.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+      });
+      addLog(`Saved ${savedScene.title}`);
+    },
+    onError: (error) => addLog(error instanceof Error ? error.message : "Could not save screen")
   });
 
   const sendSceneMutation = useMutation({
@@ -290,7 +328,10 @@ export const App = () => {
       if (!selected) throw new Error("Select a display first");
       return api.sendScene(selected.id, scene);
     },
-    onSuccess: () => addLog(`Sent scene to ${selected?.name ?? selected?.id}`),
+    onSuccess: () => {
+      addLog(`Sent scene to ${selected?.name ?? selected?.id}`);
+      queryClient.invalidateQueries({ queryKey: [...controllerQueryKeys.displays(userId), selectedDisplayId, "activity"] });
+    },
     onError: (error) => addLog(error instanceof Error ? error.message : "Could not send scene")
   });
 
@@ -349,6 +390,28 @@ export const App = () => {
     await supabase?.auth.signOut();
     queryClient.clear();
     setSession(undefined);
+  };
+
+  const newScene = () => {
+    setScene(createEditableScene());
+    addLog("Started a new screen");
+  };
+
+  const loadScene = (nextScene: Scene) => {
+    setScene(nextScene);
+    addLog(`Loaded ${nextScene.title}`);
+  };
+
+  const saveSceneAsCopy = () => {
+    const copy = {
+      ...scene,
+      id: cryptoRandomId("scene"),
+      title: scene.title.endsWith(" copy") ? scene.title : `${scene.title} copy`,
+      createdAt: undefined,
+      updatedAt: undefined
+    };
+    setScene(copy);
+    saveSceneMutation.mutate(copy);
   };
 
   if (!supabase) {
@@ -451,146 +514,43 @@ export const App = () => {
 
         <div className="min-h-0 flex-1 overflow-auto p-4 lg:p-6">
           {selectedDisplayId ? (
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-              <section className="grid content-start gap-4">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Scene preview</CardTitle>
-                    <CardDescription>{scene.title}</CardDescription>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="overflow-hidden rounded-lg bg-slate-950" style={{ aspectRatio: `${scene.canvas.width} / ${scene.canvas.height}` }}>
-                      <div className="relative size-full" style={{ background: scene.backgroundColor }}>
-                        {scene.layers.map((layer) => (
-                          <div
-                            className={`absolute overflow-hidden text-white ${layer.type === "text" ? "flex items-center font-bold" : ""}`}
-                            key={layer.id}
-                            style={{
-                              left: `${(layer.x / scene.canvas.width) * 100}%`,
-                              top: `${(layer.y / scene.canvas.height) * 100}%`,
-                              width: `${(layer.width / scene.canvas.width) * 100}%`,
-                              height: `${(layer.height / scene.canvas.height) * 100}%`,
-                              zIndex: layer.zIndex,
-                              opacity: layer.opacity,
-                              display: layer.visible ? "block" : "none",
-                              fontSize: layer.type === "text" ? `clamp(20px, 5vw, ${layer.fontSize}px)` : undefined
-                            }}
-                          >
-                            {layer.type === "text" ? layer.text : null}
-                            {layer.type === "shape" ? <span className="block size-full" style={{ background: layer.fill, borderRadius: layer.shape === "circle" ? "50%" : 6 }} /> : null}
-                            {layer.type === "image" ? <img className="size-full object-cover" src={assetPreviewUrls[layer.assetUrl] ?? layer.assetUrl} alt="" /> : null}
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Scene controls</CardTitle>
-                    <CardDescription>Uploads and scene delivery are scoped to your signed-in cafe.</CardDescription>
-                  </CardHeader>
-                  <CardContent className="grid gap-4">
-                    <Field label="Scene title" htmlFor="scene-title">
-                      <Input id="scene-title" value={scene.title} onChange={(event) => setScene({ ...scene, title: event.target.value })} />
-                    </Field>
-                    <Field label="Background" htmlFor="scene-background">
-                      <Input
-                        className="h-9 p-1"
-                        id="scene-background"
-                        type="color"
-                        value={(backgroundLayer?.type === "background" && backgroundLayer.color) || scene.backgroundColor || "#08131f"}
-                        onChange={(event) => {
-                          setScene((current) => ({
-                            ...updateFirstLayer(current, "background", { color: event.target.value }),
-                            backgroundColor: event.target.value
-                          }));
-                        }}
-                      />
-                    </Field>
-                    <Field label="Headline" htmlFor="scene-headline">
-                      <Input id="scene-headline" value={textLayer?.type === "text" ? textLayer.text : ""} onChange={(event) => setScene((current) => updateFirstLayer(current, "text", { text: event.target.value }))} />
-                    </Field>
-                    <div className="grid gap-2">
-                      <Label>Text size</Label>
-                      <Slider min={36} max={140} step={1} value={[textLayer?.type === "text" ? textLayer.fontSize : 96]} onValueChange={([value]) => setScene((current) => updateFirstLayer(current, "text", { fontSize: value ?? 96 }))} />
-                    </div>
-                    <Field label="Moving object color" htmlFor="shape-color">
-                      <Input className="h-9 p-1" id="shape-color" type="color" value={shapeLayer?.type === "shape" ? shapeLayer.fill : "#f2c14e"} onChange={(event) => setScene((current) => updateFirstLayer(current, "shape", { fill: event.target.value }))} />
-                    </Field>
-                    <Button asChild variant="secondary">
-                      <label>
-                        <ImagePlus />
-                        Add Image
-                        <input className="sr-only" type="file" accept="image/*,video/*" onChange={(event) => event.target.files?.[0] && uploadAssetMutation.mutate(event.target.files[0])} />
-                      </label>
-                    </Button>
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      <Button disabled={!selected} onClick={() => sendSceneMutation.mutate()}>
-                        <Send />
-                        Send to selected TV
-                      </Button>
-                      <Button disabled={!displays.length} variant="outline" onClick={() => broadcastSceneMutation.mutate()}>
-                        <Upload />
-                        Broadcast to all TVs
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              </section>
-
-              <aside className="grid content-start gap-4">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>{selected ? selected.name ?? selected.id : "Device"}</CardTitle>
-                    <CardDescription>{selected ? selected.id : "Select a display to edit it."}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="grid gap-3">
-                    {selected ? (
-                      <>
-                        <Field label="Name" htmlFor="display-name">
-                          <Input id="display-name" value={selectedDraft.name} onChange={(event) => setSelectedDraft({ ...selectedDraft, name: event.target.value })} />
-                        </Field>
-                        <Field label="Group" htmlFor="display-group">
-                          <Input id="display-group" value={selectedDraft.groupName} onChange={(event) => setSelectedDraft({ ...selectedDraft, groupName: event.target.value })} />
-                        </Field>
-                        <Field label="Position" htmlFor="display-position">
-                          <Input id="display-position" value={selectedDraft.positionLabel} onChange={(event) => setSelectedDraft({ ...selectedDraft, positionLabel: event.target.value })} />
-                        </Field>
-                        <Button onClick={() => updateDisplayMutation.mutate()}>
-                          <Save />
-                          Save device
-                        </Button>
-                        <Separator />
-                        <dl className="grid grid-cols-2 gap-3 text-sm">
-                  <Stat label="Heartbeat" value={selected.lastHeartbeatAt ? new Date(selected.lastHeartbeatAt).toLocaleString() : "never"} />
-                  <Stat label="Resolution" value={selectedCapabilityCanvas ? formatCanvas(selectedCapabilityCanvas) : "unknown"} />
-                  <Stat label="Aspect" value={selectedCapabilityCanvas ? aspectRatioLabel(selectedCapabilityCanvas) : "unknown"} />
-                  <Stat label="Scene canvas" value={formatCanvas(scene.canvas)} />
-                  <Stat label="Scene aspect" value={aspectRatioLabel(scene.canvas)} />
-                          <Stat label="App" value={selected.appVersion ?? "unknown"} />
-                          <Stat label="Scene" value={`v${selected.currentSceneVersion}`} />
-                          <Stat label="Ack" value={String(selected.lastAckVersion ?? "none")} />
-                        </dl>
-                        {selected.lastError ? <p className="rounded-md bg-destructive/10 p-2 text-sm text-destructive">{selected.lastError}</p> : null}
-                      </>
-                    ) : (
-                      <p className="text-sm text-muted-foreground">That display is not in the current device list.</p>
-                    )}
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Activity</CardTitle>
-                  </CardHeader>
-                  <CardContent className="grid gap-2">
-                    {logs.length ? logs.map((log) => <p className="text-sm text-muted-foreground" key={log}>{log}</p>) : <p className="text-sm text-muted-foreground">No activity yet.</p>}
-                  </CardContent>
-                </Card>
-              </aside>
-            </div>
+            selected ? (
+              <SceneEditor
+                activity={activityQuery.data ?? []}
+                assetPreviewUrls={assetPreviewUrls}
+                display={selected}
+                displayDraft={selectedDraft}
+                displaysCount={displays.length}
+                isBroadcasting={broadcastSceneMutation.isPending}
+                isSavingScene={saveSceneMutation.isPending}
+                isSending={sendSceneMutation.isPending}
+                isRelinking={relinkTvMutation.isPending}
+                isUpdatingDisplay={updateDisplayMutation.isPending}
+                isUploadingAsset={uploadAssetMutation.isPending}
+                logs={logs}
+                onBroadcast={() => broadcastSceneMutation.mutate()}
+                onLoadScene={loadScene}
+                onNewScene={newScene}
+                onSaveAsCopy={saveSceneAsCopy}
+                onSaveDevice={() => updateDisplayMutation.mutate()}
+                onSaveScene={() => saveSceneMutation.mutate(undefined)}
+                onSend={() => sendSceneMutation.mutate()}
+                onRelink={(code) => relinkTvMutation.mutate(code)}
+                onUpdateDisplayDraft={setSelectedDraft}
+                onUploadAsset={(file, position) => uploadAssetMutation.mutate({ file, position })}
+                savedScenes={scenesQuery.data ?? []}
+                scene={scene}
+                selectedCapabilityCanvas={selectedCapabilityCanvas}
+                setScene={setScene}
+              />
+            ) : (
+              <Card>
+                <CardHeader>
+                  <CardTitle>Device not found</CardTitle>
+                  <CardDescription>That display is not in the current device list.</CardDescription>
+                </CardHeader>
+              </Card>
+            )
           ) : (
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
               <section className="grid content-start gap-4">
@@ -685,31 +645,6 @@ const Field = ({ label, htmlFor, children }: { label: string; htmlFor: string; c
     {children}
   </div>
 );
-
-const Stat = ({ label, value }: { label: string; value: string }) => (
-  <div>
-    <dt className="text-muted-foreground">{label}</dt>
-    <dd className="font-medium">{value}</dd>
-  </div>
-);
-
-const formatCanvas = (canvas: Scene["canvas"]): string => `${canvas.width} x ${canvas.height}`;
-
-const aspectRatioLabel = (canvas: Scene["canvas"]): string => {
-  const divisor = gcd(canvas.width, canvas.height);
-  return `${canvas.width / divisor}:${canvas.height / divisor}`;
-};
-
-const gcd = (a: number, b: number): number => {
-  let left = Math.abs(Math.round(a));
-  let right = Math.abs(Math.round(b));
-  while (right) {
-    const next = left % right;
-    left = right;
-    right = next;
-  }
-  return left || 1;
-};
 
 const getAuthRedirectTo = (): string => {
   const url = new URL(window.location.href);

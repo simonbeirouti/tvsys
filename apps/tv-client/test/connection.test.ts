@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_CANVAS } from "@tvsys/shared";
 import { detectDisplayCapabilities } from "../src/capabilities.js";
-import { buildDisplayWsUrl, buildDisplayWsUrlWithToken, nextReconnectDelay, shouldApplySceneVersion } from "../src/connection.js";
+import { buildDisplayWsUrl, buildDisplayWsUrlWithToken, nextReconnectDelay, shouldApplySceneVersion, shouldRefreshDisplayToken, withRefreshedDisplayToken } from "../src/connection.js";
 import { createHeartbeatMessage } from "../src/socket.js";
 
 describe("display connection helpers", () => {
@@ -19,6 +19,62 @@ describe("display connection helpers", () => {
   it("ignores stale scene versions", () => {
     expect(shouldApplySceneVersion(3, 2)).toBe(true);
     expect(shouldApplySceneVersion(2, 2)).toBe(false);
+  });
+
+  it("detects display token refresh windows", () => {
+    expect(
+      shouldRefreshDisplayToken({
+        serverUrl: "http://localhost:8787",
+        displayId: "display-1",
+        displayAuthToken: "display_old",
+        installationId: "install-1"
+      })
+    ).toBe(true);
+    expect(
+      shouldRefreshDisplayToken(
+        {
+          serverUrl: "http://localhost:8787",
+          displayId: "display-1",
+          displayAuthToken: "display_old",
+          installationId: "install-1",
+          displayTokenExpiresAt: "2026-06-20T00:00:00.000Z"
+        },
+        Date.parse("2026-06-10T00:00:00.000Z")
+      )
+    ).toBe(false);
+    expect(
+      shouldRefreshDisplayToken(
+        {
+          serverUrl: "http://localhost:8787",
+          displayId: "display-1",
+          displayAuthToken: "display_old",
+          installationId: "install-1",
+          displayTokenExpiresAt: "2026-06-16T00:00:00.000Z"
+        },
+        Date.parse("2026-06-10T00:00:00.000Z")
+      )
+    ).toBe(true);
+  });
+
+  it("updates persisted display tokens without changing device identity", () => {
+    expect(
+      withRefreshedDisplayToken(
+        {
+          serverUrl: "http://localhost:8787",
+          displayId: "display-1",
+          displayAuthToken: "display_old",
+          installationId: "install-1"
+        },
+        "display_new",
+        "2026-09-01T00:00:00.000Z"
+      )
+    ).toEqual({
+      serverUrl: "http://localhost:8787",
+      displayId: "display-1",
+      displayAuthToken: "display_new",
+      installationId: "install-1",
+      displayTokenExpiresAt: "2026-09-01T00:00:00.000Z"
+    });
   });
 
   it("detects visual viewport capabilities first", () => {

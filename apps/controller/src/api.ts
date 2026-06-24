@@ -1,11 +1,21 @@
-import { bearerAuthorization, type CafeRow, type DisplayStatus, type Scene } from "@tvsys/shared";
+import { bearerAuthorization, type CafeRow, type DisplayStatus, type OwnedDelivery, type OwnedScene, type Scene } from "@tvsys/shared";
 
 export interface DisplayCreateResponse {
   display: DisplayStatus;
+  displayToken?: string;
+  displayTokenExpiresAt?: string;
 }
 
 export interface DisplaysResponse {
   displays: DisplayStatus[];
+}
+
+export interface ScenesResponse {
+  scenes: OwnedScene[];
+}
+
+export interface SceneResponse {
+  scene: OwnedScene;
 }
 
 export interface AssetResponse {
@@ -21,6 +31,10 @@ export interface AssetResponse {
 export interface MeResponse {
   user: { id: string; email?: string };
   cafe: CafeRow;
+}
+
+export interface DisplayActivityResponse {
+  activity: OwnedDelivery[];
 }
 
 export class ControllerApi {
@@ -40,6 +54,12 @@ export class ControllerApi {
     return body.displays;
   }
 
+  async listScenes(): Promise<OwnedScene[]> {
+    const response = await this.fetchAuth("/api/scenes");
+    const body = (await response.json()) as ScenesResponse;
+    return body.scenes;
+  }
+
   async createDisplay(input: { id: string; name?: string; groupName?: string; positionLabel?: string }): Promise<DisplayCreateResponse["display"]> {
     const response = await this.fetchAuth("/api/displays", {
       method: "POST",
@@ -51,11 +71,11 @@ export class ControllerApi {
     return body.display;
   }
 
-  async linkTv(code: string): Promise<DisplayCreateResponse["display"]> {
+  async linkTv(code: string, displayId?: string): Promise<DisplayCreateResponse["display"]> {
     const response = await this.fetchAuth("/api/tv/activation/claim", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ code })
+      body: JSON.stringify({ code, displayId })
     });
     if (!response.ok) throw new Error(await response.text());
     const body = (await response.json()) as DisplayCreateResponse;
@@ -73,6 +93,12 @@ export class ControllerApi {
     return body.display;
   }
 
+  async listDisplayActivity(displayId: string): Promise<OwnedDelivery[]> {
+    const response = await this.fetchAuth(`/api/displays/${encodeURIComponent(displayId)}/activity`);
+    const body = (await response.json()) as DisplayActivityResponse;
+    return body.activity;
+  }
+
   async uploadAsset(file: File): Promise<AssetResponse["asset"]> {
     const response = await this.fetchAuth(`/api/assets/${encodeURIComponent(file.name)}`, {
       method: "PUT",
@@ -85,6 +111,17 @@ export class ControllerApi {
       ...body.asset,
       url: isAbsoluteUrl(body.asset.url) ? body.asset.url : `${this.serverUrl}${body.asset.url}`
     };
+  }
+
+  async saveScene(scene: Scene): Promise<OwnedScene> {
+    const response = await this.fetchAuth("/api/scenes", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ scene, title: scene.title })
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const body = (await response.json()) as SceneResponse;
+    return body.scene;
   }
 
   async sendScene(displayId: string, scene: Scene): Promise<void> {

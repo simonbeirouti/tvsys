@@ -8,8 +8,8 @@ import { SignageHub } from "./ws.js";
 
 const config = loadConfig();
 const store = new Store(config);
-const activation = new ActivationService(config);
-const auth = new AuthService(config, store, activation);
+const activation = new ActivationService();
+const auth = new AuthService(config, store);
 let hub: SignageHub | undefined;
 
 const server = http.createServer(createRequestHandler(store, auth, activation, () => hub));

@@ -1,6 +1,6 @@
 import type { DisplayStatus } from "../protocol.js";
 import type { Scene } from "../scene.js";
-import type { AssetRow, CafeRow, DeliveryHistoryRow, DeviceRow, SceneRow } from "./types.js";
+import type { AssetRow, CafeRow, DeliveryHistoryRow, DeviceRow, DisplaySessionRow, SceneRow } from "./types.js";
 export type OwnerUserId = string;
 export type InstallationId = string;
 export type DeviceId = string;
@@ -38,6 +38,27 @@ export interface OwnedScene {
     createdAt: string;
     updatedAt: string;
 }
+export interface OwnedDelivery {
+    id: string;
+    ownerUserId: OwnerUserId;
+    deviceId: DeviceId;
+    sceneId: SceneId;
+    sceneVersion: number;
+    deliveredAt: string;
+    acknowledgedAt?: string;
+    error?: string;
+}
+export interface OwnedDisplaySession {
+    id: string;
+    ownerUserId: OwnerUserId;
+    deviceId: DeviceId;
+    tokenHash: string;
+    createdAt: string;
+    lastSeenAt?: string;
+    expiresAt: string;
+    rotatedAt?: string;
+    revokedAt?: string;
+}
 export interface TvRegistration {
     installationId: InstallationId;
     name?: string;
@@ -48,14 +69,6 @@ export interface TvRegistration {
 export declare const displayStatusFromDeviceRow: (row: DeviceRow) => OwnedDisplayStatus;
 export declare const assetFromRow: (row: AssetRow, url: string) => OwnedAsset;
 export declare const sceneFromRow: (row: SceneRow) => OwnedScene;
-export declare const deliveryFromRow: (row: DeliveryHistoryRow) => {
-    id: string;
-    ownerUserId: string;
-    deviceId: string;
-    sceneId: string;
-    sceneVersion: number;
-    deliveredAt: string;
-    acknowledgedAt: string | undefined;
-    error: string | undefined;
-};
+export declare const deliveryFromRow: (row: DeliveryHistoryRow) => OwnedDelivery;
+export declare const displaySessionFromRow: (row: DisplaySessionRow) => OwnedDisplaySession;
 //# sourceMappingURL=ownership.d.ts.map

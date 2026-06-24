@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createDefaultScene, validateCapabilities, validateScene, type HeartbeatMessage } from "../src/index.js";
+import { createDefaultScene, createMotionAnimation, createShapeLayer, validateCapabilities, validateScene, type HeartbeatMessage } from "../src/index.js";
 
 describe("scene validation", () => {
   it("accepts a default scene", () => {
@@ -26,6 +26,14 @@ describe("scene validation", () => {
     const result = validateScene(scene);
     expect(result.ok).toBe(false);
     expect(result.errors.join(" ")).toContain("text is required");
+  });
+
+  it("accepts safe motion preset animations on dynamic layers", () => {
+    const scene = createDefaultScene("Dynamic");
+    const shape = createShapeLayer({ animation: createMotionAnimation("pulse", { x: 10, y: 10, opacity: 1 }) });
+    scene.layers.push(shape);
+
+    expect(validateScene(scene).ok).toBe(true);
   });
 
   it("accepts extended display capabilities", () => {

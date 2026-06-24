@@ -3,6 +3,7 @@ export interface DisplayConfig {
   displayId: string;
   displayAuthToken: string;
   installationId: string;
+  displayTokenExpiresAt?: string;
 }
 
 const STORAGE_KEY = "tvsys.displayConfig";
@@ -18,7 +19,13 @@ export const loadDisplayConfig = (): DisplayConfig | undefined => {
       typeof parsed.displayAuthToken === "string" &&
       typeof parsed.installationId === "string"
     ) {
-      return parsed as DisplayConfig;
+      return {
+        serverUrl: parsed.serverUrl,
+        displayId: parsed.displayId,
+        displayAuthToken: parsed.displayAuthToken,
+        installationId: parsed.installationId,
+        displayTokenExpiresAt: typeof parsed.displayTokenExpiresAt === "string" ? parsed.displayTokenExpiresAt : undefined
+      };
     }
     localStorage.removeItem(STORAGE_KEY);
     return undefined;
@@ -46,6 +53,18 @@ export const nextReconnectDelay = (attempt: number): number => Math.min(1000 * 2
 
 export const shouldApplySceneVersion = (incomingVersion: number, currentVersion: number): boolean =>
   Number.isFinite(incomingVersion) && incomingVersion > currentVersion;
+
+export const shouldRefreshDisplayToken = (config: DisplayConfig, nowMs = Date.now(), refreshWindowMs = 7 * 24 * 60 * 60 * 1000): boolean => {
+  if (!config.displayTokenExpiresAt) return true;
+  const expiresAt = new Date(config.displayTokenExpiresAt).getTime();
+  return !Number.isFinite(expiresAt) || expiresAt - nowMs <= refreshWindowMs;
+};
+
+export const withRefreshedDisplayToken = (config: DisplayConfig, displayAuthToken: string, displayTokenExpiresAt: string): DisplayConfig => ({
+  ...config,
+  displayAuthToken,
+  displayTokenExpiresAt
+});
 
 export const loadOrCreateInstallationId = (): string => {
   const key = "tvsys.installationId";

@@ -1,11 +1,28 @@
 import crypto from "node:crypto";
-import { createTvsysSupabaseClient, normalizeScene, type AssetRow, type AuthenticatedUser, type CafeRow, type DeviceRow, type DisplayCapabilities, type OwnedAsset, type OwnedDisplayStatus, type OwnedScene, type Scene, type SceneRow } from "@tvsys/shared";
-import { assetFromRow, displayStatusFromDeviceRow, sceneFromRow } from "@tvsys/shared";
+import { createTvsysSupabaseClient, normalizeScene, type AssetRow, type AuthenticatedUser, type CafeRow, type DeliveryHistoryRow, type DeviceRow, type DisplayCapabilities, type DisplaySessionRow, type OwnedAsset, type OwnedDelivery, type OwnedDisplaySession, type OwnedDisplayStatus, type OwnedScene, type Scene, type SceneRow } from "@tvsys/shared";
+import { assetFromRow, deliveryFromRow, displaySessionFromRow, displayStatusFromDeviceRow, sceneFromRow } from "@tvsys/shared";
 import type { ServerConfig } from "./config.js";
 
 export type DisplayRecord = OwnedDisplayStatus;
 export type SceneRecord = OwnedScene;
 export type AssetRecord = OwnedAsset;
+export type DeliveryRecord = OwnedDelivery;
+export type DisplaySessionRecord = OwnedDisplaySession;
+
+export interface DisplaySessionCredentials {
+  displayToken: string;
+  expiresAt: string;
+  session: DisplaySessionRecord;
+}
+
+export interface AuthenticatedDisplaySession {
+  displayId: string;
+  installationId: string;
+  ownerUserId: string;
+  session: DisplaySessionRecord;
+}
+
+const DISPLAY_SESSION_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
 export class Store {
   private readonly supabase: ReturnType<typeof createTvsysSupabaseClient>;
@@ -88,6 +105,34 @@ export class Store {
       throw new Error(error.message);
     }
     return displayStatusFromDeviceRow(data as DeviceRow);
+  }
+
+  async relinkTv(input: {
+    ownerUserId: string;
+    displayId: string;
+    installationId: string;
+    appVersion: string;
+    capabilities: DisplayCapabilities;
+  }): Promise<DisplayRecord | undefined> {
+    const existing = await this.getDisplay(input.ownerUserId, input.displayId);
+    if (!existing) return undefined;
+    const now = new Date().toISOString();
+    await this.db
+      .from("devices")
+      .update({ installation_id: null, updated_at: now })
+      .eq("owner_user_id", input.ownerUserId)
+      .eq("installation_id", input.installationId)
+      .neq("id", input.displayId);
+    const row = await this.updateOne<DeviceRow>("devices", input.displayId, {
+      installation_id: input.installationId,
+      online: true,
+      last_heartbeat_at: now,
+      app_version: input.appVersion,
+      capabilities_json: input.capabilities,
+      last_error: null,
+      updated_at: now
+    });
+    return displayStatusFromDeviceRow(row);
   }
 
   async updateDisplay(
@@ -282,6 +327,53 @@ export class Store {
     };
   }
 
+  async createDisplaySession(ownerUserId: string, displayId: string): Promise<DisplaySessionCredentials | undefined> {
+    const display = await this.getDisplay(ownerUserId, displayId);
+    if (!display) return undefined;
+    await this.revokeDisplaySessions(ownerUserId, displayId);
+    return this.insertDisplaySession(ownerUserId, displayId);
+  }
+
+  async authenticateDisplaySession(displayToken: string): Promise<AuthenticatedDisplaySession | undefined> {
+    return this.findActiveDisplaySession(displayToken, true);
+  }
+
+  async rotateDisplaySession(displayToken: string): Promise<DisplaySessionCredentials | undefined> {
+    const active = await this.findActiveDisplaySession(displayToken, false);
+    if (!active) return undefined;
+    const now = new Date().toISOString();
+    await this.updateOne<DisplaySessionRow>("display_sessions", active.session.id, {
+      rotated_at: now,
+      revoked_at: now
+    });
+    return this.insertDisplaySession(active.ownerUserId, active.displayId);
+  }
+
+  async revokeDisplaySessions(ownerUserId: string, displayId: string): Promise<void> {
+    const now = new Date().toISOString();
+    const { error } = await this.db
+      .from("display_sessions")
+      .update({ revoked_at: now })
+      .eq("owner_user_id", ownerUserId)
+      .eq("device_id", displayId)
+      .is("revoked_at", null);
+    if (error) throw new Error(error.message);
+  }
+
+  async listDisplayActivity(ownerUserId: string, displayId: string): Promise<DeliveryRecord[] | undefined> {
+    const display = await this.getDisplay(ownerUserId, displayId);
+    if (!display) return undefined;
+    const { data, error } = await this.supabase
+      .from("delivery_history")
+      .select("*")
+      .eq("owner_user_id", ownerUserId)
+      .eq("device_id", displayId)
+      .order("delivered_at", { ascending: false })
+      .limit(50);
+    if (error) throw new Error(error.message);
+    return ((data ?? []) as DeliveryHistoryRow[]).map(deliveryFromRow);
+  }
+
   async saveAsset(ownerUserId: string, input: { filename: string; mimeType: string; body: Buffer }): Promise<AssetRecord> {
     const id = crypto.randomUUID();
     const safeName = input.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -352,6 +444,56 @@ export class Store {
     return data as TRow;
   }
 
+  private async insertDisplaySession(ownerUserId: string, displayId: string): Promise<DisplaySessionCredentials> {
+    const displayToken = createDisplayToken();
+    const expiresAt = new Date(Date.now() + DISPLAY_SESSION_TTL_MS).toISOString();
+    const row = await this.insertOne<DisplaySessionRow>("display_sessions", {
+      owner_user_id: ownerUserId,
+      device_id: displayId,
+      token_hash: this.hashDisplayToken(displayToken),
+      expires_at: expiresAt
+    });
+    return { displayToken, expiresAt, session: displaySessionFromRow(row) };
+  }
+
+  private async findActiveDisplaySession(displayToken: string, updateLastSeen: boolean): Promise<AuthenticatedDisplaySession | undefined> {
+    if (!displayToken.startsWith("display_")) return undefined;
+    const now = new Date().toISOString();
+    const { data, error } = await this.db
+      .from("display_sessions")
+      .select("*")
+      .eq("token_hash", this.hashDisplayToken(displayToken))
+      .is("revoked_at", null)
+      .is("rotated_at", null)
+      .gt("expires_at", now)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    if (!data) return undefined;
+    const sessionRow = data as DisplaySessionRow;
+    const display = await this.getDisplay(sessionRow.owner_user_id, sessionRow.device_id);
+    if (!display?.installationId) return undefined;
+    if (updateLastSeen) {
+      const seenRow = await this.updateOne<DisplaySessionRow>("display_sessions", sessionRow.id, { last_seen_at: now });
+      return {
+        ownerUserId: seenRow.owner_user_id,
+        displayId: seenRow.device_id,
+        installationId: display.installationId,
+        session: displaySessionFromRow(seenRow)
+      };
+    }
+    return {
+      ownerUserId: sessionRow.owner_user_id,
+      displayId: sessionRow.device_id,
+      installationId: display.installationId,
+      session: displaySessionFromRow(sessionRow)
+    };
+  }
+
+  private hashDisplayToken(displayToken: string): string {
+    return crypto.createHmac("sha256", this.config.supabaseServiceRoleKey).update(displayToken).digest("hex");
+  }
+
   private async findDeviceByInstallation(ownerUserId: string, installationId: string): Promise<DeviceRow | undefined> {
     return this.selectOne<DeviceRow>("devices", {
       owner_user_id: ownerUserId,
@@ -389,6 +531,8 @@ const isUniqueViolation = (error: unknown): boolean => {
   const maybeError = error as { code?: unknown; message?: unknown };
   return maybeError.code === "23505" || (typeof maybeError.message === "string" && maybeError.message.includes("duplicate key value violates unique constraint"));
 };
+
+const createDisplayToken = (): string => `display_${crypto.randomBytes(32).toString("base64url")}`;
 
 const extractAssetId = (value: string): string | undefined => {
   const directAssetMatch = value.match(/^asset:([^/?#]+)$/);

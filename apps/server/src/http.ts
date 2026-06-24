@@ -23,6 +23,14 @@ export const createRequestHandler = (store: Store, auth: AuthService, activation
         return sendJson(response, current ?? { scene: null, sceneVersion: 0 });
       }
 
+      if (request.method === "POST" && url.pathname === "/api/tv/session/refresh") {
+        const displayToken = extractDisplayBearerToken(request.headers.authorization);
+        if (!displayToken) return sendJson(response, { error: "Missing display token" }, 401);
+        const result = await store.rotateDisplaySession(displayToken);
+        if (!result) return sendJson(response, { error: "Invalid display token" }, 401);
+        return sendJson(response, { displayToken: result.displayToken, expiresAt: result.expiresAt });
+      }
+
       const context = await auth.authenticateHeader(request.headers.authorization);
 
       if (request.method === "GET" && url.pathname === "/api/me") {
@@ -89,10 +97,10 @@ export const createRequestHandler = (store: Store, auth: AuthService, activation
       }
 
       if (request.method === "POST" && url.pathname === "/api/tv/activation/claim") {
-        const body = await readJson<{ code: string }>(request);
+        const body = await readJson<{ code: string; displayId?: string }>(request);
         const code = normalizeCode(body.code ?? "");
         if (!code) return sendJson(response, { error: "Linking code is required" }, 400);
-        const result = await activation.claim(store, context.user, code);
+        const result = await activation.claim(store, context.user, code, body.displayId?.trim() || undefined);
         getHub()?.broadcastStatus(result.display);
         return sendJson(response, result, 201);
       }
@@ -105,6 +113,14 @@ export const createRequestHandler = (store: Store, auth: AuthService, activation
         if (!display) return sendJson(response, { error: `Unknown display: ${displayId}` }, 404);
         getHub()?.broadcastStatus(display);
         return sendJson(response, { display });
+      }
+
+      const displayActivityMatch = url.pathname.match(/^\/api\/displays\/([^/]+)\/activity$/);
+      if (displayActivityMatch && request.method === "GET") {
+        const displayId = decodeURIComponent(displayActivityMatch[1]);
+        const activity = await store.listDisplayActivity(context.user.id, displayId);
+        if (!activity) return sendJson(response, { error: `Unknown display: ${displayId}` }, 404);
+        return sendJson(response, { activity });
       }
 
       if (request.method === "GET" && url.pathname === "/api/scenes") {
@@ -154,6 +170,12 @@ export const createRequestHandler = (store: Store, auth: AuthService, activation
       return sendJson(response, { error: message }, 500);
     }
   };
+};
+
+const extractDisplayBearerToken = (header: string | string[] | undefined): string | undefined => {
+  const raw = Array.isArray(header) ? header[0] : header;
+  const match = raw?.match(/^Bearer\s+(.+)$/i);
+  return match?.[1]?.trim() || undefined;
 };
 
 export const sendJson = (response: http.ServerResponse, payload: unknown, statusCode = 200): void => {
